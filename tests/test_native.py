@@ -33,6 +33,9 @@ class BufferTests(unittest.TestCase):
             self.assertEqual(records[1], "中")
             self.assertEqual(records[2], "\ufffd" * 5)
             self.assertEqual(records[3], [2**64 - 1, 0.125, "Infinity", "-Infinity", "NaN"])
+            self.assertEqual(records[4], "%o %O %j %% %s")
+            # Browser-driver log sinks can interpret printf-style formatting.
+            self.assertNotIn("%", result.stdout)
 
 
 class SourceTests(unittest.TestCase):

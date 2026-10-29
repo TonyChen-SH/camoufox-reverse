@@ -60,7 +60,7 @@ class JsonBuffer final {
         escaped[0] = '\\';
         escaped[1] = static_cast<char>(first);
         piece = {escaped, 2};
-      } else if (first < 0x20) {
+      } else if (first < 0x20 || first == '%') {
         escaped[0] = '\\'; escaped[1] = 'u';
         escaped[2] = '0'; escaped[3] = '0';
         escaped[4] = hex[first >> 4]; escaped[5] = hex[first & 15];

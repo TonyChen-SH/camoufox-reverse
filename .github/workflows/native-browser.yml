@@ -21,12 +21,19 @@ jobs:
     env:
       BUILD_TARGET: linux,x86_64
       CARGO_BUILD_JOBS: '1'
-      MOZBUILD_STATE_PATH: ${{ github.workspace }}/.mozbuild
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Restore identical compiled browser
+        id: binary_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: dist
+          key: browser-158-linux-v1-${{ hashFiles('additions/**', 'patches/**', 'baseline.json') }}
       - name: Reclaim build space
+        if: steps.binary_cache.outputs.cache-hit != 'true'
         uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef
         with:
           remove-dotnet: 'true'
@@ -46,6 +53,7 @@ jobs:
           path: upstream
           persist-credentials: false
       - name: Install build and browser prerequisites
+        if: steps.binary_cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -61,31 +69,35 @@ jobs:
           free -h
           df -h /
       - name: Restore native compiler cache
+        if: steps.binary_cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: |
-            ~/.ccache
-            .mozbuild
+            .ccache
+            ~/.mozbuild
           key: native-158-linux-${{ hashFiles('additions/**', 'patches/**', 'baseline.json') }}
           restore-keys: native-158-linux-
       - name: Prepare complete Camoufox source
+        if: steps.binary_cache.outputs.cache-hit != 'true'
         working-directory: upstream
         run: |
           ccache -M 4G
           python3 -m ci.run_prepare
       - name: Apply and compile native tracer
+        if: steps.binary_cache.outputs.cache-hit != 'true'
         run: |
           python tools/apply.py --source upstream/browser/camoufox-158.0.1-beta.34
           make -C upstream/browser build
       - name: Save native compiler cache
-        if: always()
+        if: always() && steps.binary_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
-            ~/.ccache
-            .mozbuild
+            .ccache
+            ~/.mozbuild
           key: native-158-linux-${{ hashFiles('additions/**', 'patches/**', 'baseline.json') }}
       - name: Stage complete browser resources
+        if: steps.binary_cache.outputs.cache-hit != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -99,6 +111,7 @@ jobs:
           done
           echo "CAMOUFOX_BINARY=$(realpath "$src/camoufox-bin")" >> "$GITHUB_ENV"
       - name: Package browser candidate
+        if: steps.binary_cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p dist
           src=upstream/browser/camoufox-158.0.1-beta.34/obj-x86_64-pc-linux-gnu/dist
@@ -106,6 +119,12 @@ jobs:
           cp baseline.json dist/baseline.json
           cd dist
           sha256sum camoufox-trace-linux-x86_64.tar.zst > SHA256SUMS
+      - name: Cache this exact compiled browser
+        if: steps.binary_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: dist
+          key: browser-158-linux-v1-${{ hashFiles('additions/**', 'patches/**', 'baseline.json') }}
       - uses: actions/upload-artifact@v4
         with:
           name: camoufox-trace-candidate-linux-x86_64

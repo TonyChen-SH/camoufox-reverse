@@ -28,7 +28,7 @@
   "additions": {
     "dom/bindings/CamoufoxTrace.cpp": "ca5d888568b4cba76ceb002d7a4d3d2079708442e785a67870ae71eeb0139029",
     "dom/bindings/CamoufoxTrace.h": "1a0bb1973d01cd346b1f7ba3da940ebd4965ae8ebcb175efcf04e9761b500e88",
-    "dom/bindings/CamoufoxTraceBuffer.h": "96466694bb9c895f7d1591225bb42fa45e78af863fa357f2b692feebe9c05428"
+    "dom/bindings/CamoufoxTraceBuffer.h": "926b25c11fa4c8708f85442bc5a10ed4de8b2752e128e5e58e944cd22bd7ade9"
   },
   "coverage": {
     "Navigator.userAgent": "get",

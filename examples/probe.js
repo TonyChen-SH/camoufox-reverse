@@ -19,7 +19,7 @@
     observed.expectedException = error.name;
   }
   observed.afterException = context.getImageData(0, 0, 1, 1).width;
-  observed.unicodeDataURLLength = canvas.toDataURL("image/png\u0000中🦊").length;
+  observed.unicodeDataURLLength = canvas.toDataURL("image/png\u0000中🦊%o %O %j %% %s").length;
   let conversions = 0;
   canvas.toDataURL({toString() { conversions++; return "image/png"; }});
   observed.argumentConversions = conversions;

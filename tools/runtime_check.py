@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import sys
 import threading
+import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,13 +60,13 @@ def child(binary, mode, output):
             page.wait_for_function("document.querySelector('#result').textContent.startsWith('{')",
                                    timeout=30000)
             observed = json.loads(page.locator("#result").inner_text())
+            output.write_text(json.dumps(observed, ensure_ascii=True, indent=2) + "\n")
             if observed.get("expectedException") != "IndexSizeError":
                 raise AssertionError(f"Unexpected page exception result: {observed}")
             if observed.get("afterException") != 1 or observed.get("argumentConversions") != 1:
                 raise AssertionError("Tracing changed exception recovery or argument coercion")
             if observed.get("webgl") == "unavailable" or observed.get("webgl2") == "unavailable":
                 raise RuntimeError("Both WebGL versions are required by this runtime gate")
-            output.write_text(json.dumps(observed, ensure_ascii=True, indent=2) + "\n")
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -114,7 +115,9 @@ def validate(binary, destination):
                                "--binary", str(binary), "--mode", mode,
                                "--output", str(observed)], trace, timeout=180)
             if outcome["termination"] != "normal_exit":
-                raise AssertionError(f"Browser case {mode} failed: {outcome}")
+                details = observed.with_suffix(".error.txt")
+                reason = details.read_text() if details.exists() else str(outcome)
+                raise AssertionError(f"Browser case {mode} failed: {reason}")
             capture = read_capture(trace)
             captures[mode] = capture
             summary = summarize(capture)
@@ -139,9 +142,9 @@ def validate(binary, destination):
                 if not any(event["api"] == "CanvasRenderingContext2D.getImageData" and event["threw"]
                            for event in fixture_events):
                     raise AssertionError("Native exception event was not captured")
-                if not any(any(argument.get("value") == "image/png\0中🦊" for argument in event["args"])
+                if not any(any(argument.get("value") == "image/png\0中🦊%o %O %j %% %s" for argument in event["args"])
                            for event in fixture_events):
-                    raise AssertionError("UTF-8/NUL argument was not preserved")
+                    raise AssertionError("UTF-8/NUL/percent argument was not preserved")
                 page = json.loads(observed.read_text())
                 for name in ("userAgent", "appVersion", "platform", "hardwareConcurrency"):
                     matching = [event for event in fixture_events if event["api"] == "Navigator." + name]
@@ -182,7 +185,11 @@ def main():
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     if args.child:
-        child(binary, args.mode, args.output.resolve())
+        try:
+            child(binary, args.mode, args.output.resolve())
+        except Exception:
+            args.output.with_suffix(".error.txt").write_text(traceback.format_exc())
+            raise
     else:
         validate(binary, args.output.resolve())
 

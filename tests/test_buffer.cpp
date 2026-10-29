@@ -50,4 +50,8 @@ int main() {
   empty.Raw(std::string_view{});
   empty.String("");
   assert(empty.View() == "\"\"");
+
+  JsonBuffer<128> format;
+  format.String("%o %O %j %% %s");
+  std::cout << format.View() << '\n';
 }
