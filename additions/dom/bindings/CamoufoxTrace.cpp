@@ -23,12 +23,14 @@
 #endif
 
 #include "jsapi.h"
+#include "jsfriendapi.h"
 #include "js/Class.h"
 #include "js/ColumnNumber.h"
 #include "js/Exception.h"
 #include "js/GlobalObject.h"
 #include "js/Object.h"
 #include "js/RootingAPI.h"
+#include "js/Realm.h"
 #include "js/Stack.h"
 #include "js/String.h"
 #include "mozilla/Span.h"
@@ -259,9 +261,11 @@ static State* Begin(JSContext* cx, JS::Value* returnValue, const char* api,
   JS::RootedObject frames(cx);
   JS::RootedString stack(cx);
   if (Configuration().stack) {
+    JS::Realm* realm = JS::GetCurrentRealmOrNull(cx);
     if (JS::CaptureCurrentStack(cx, &frames,
                                 JS::StackCapture(JS::MaxFrames(12))) &&
-        JS::BuildStackString(cx, nullptr, frames, &stack)) {
+        realm && JS::BuildStackString(cx, JS::GetRealmPrincipals(realm),
+                                      frames, &stack)) {
       String(cx, stack, state->stack, 512);
       state->stackStatus = "captured";
     } else {

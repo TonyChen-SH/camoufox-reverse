@@ -45,12 +45,6 @@ jobs:
           ref: b6205b0ee1e4c2e8e4bb9eb0e084472028a9c6a3
           path: upstream
           persist-credentials: false
-      - uses: actions/checkout@v4
-        with:
-          repository: TonyChen-SH/camoufox-reverse-mcp
-          ref: cbcc57af622c4f91b89e4b97036d085e0a8f0785
-          path: analysis
-          persist-credentials: false
       - name: Install build and browser prerequisites
         run: |
           sudo apt-get update -qq
@@ -66,9 +60,6 @@ jobs:
           sudo swapon /swapfile
           free -h
           df -h /
-          python -m pip install -r analysis/requirements-mcp.lock
-          python -m pip install --no-deps -e analysis
-          python -m pip install 'playwright==1.62.0'
       - name: Restore native compiler cache
         uses: actions/cache/restore@v4
         with:
@@ -101,22 +92,91 @@ jobs:
           make -C upstream/browser stage-fonts
           src=upstream/browser/camoufox-158.0.1-beta.34/obj-x86_64-pc-linux-gnu/dist/bin
           test -x "$src/camoufox-bin"
-          cp upstream/browser/settings/properties.json "$src/properties.json"
+          test -f "$src/properties.json" || cp upstream/browser/settings/properties.json "$src/properties.json"
           python upstream/browser/scripts/fetch-ubo.py stage "$src"
           for required in camoufox.cfg fonts/groups.json fontconfig/linux addons/UBO/manifest.json; do
             test -e "$src/$required"
           done
           echo "CAMOUFOX_BINARY=$(realpath "$src/camoufox-bin")" >> "$GITHUB_ENV"
-      - name: Real browser trace and MCP round trip
-        run: xvfb-run -a python tools/runtime_check.py --binary "$CAMOUFOX_BINARY" --output evidence/runtime
-      - name: Package tested browser
+      - name: Package browser candidate
         run: |
           mkdir -p dist
           src=upstream/browser/camoufox-158.0.1-beta.34/obj-x86_64-pc-linux-gnu/dist
           tar -C "$src" --dereference -cf - bin | zstd -3 -T0 -o dist/camoufox-trace-linux-x86_64.tar.zst
           cp baseline.json dist/baseline.json
-          cp evidence/runtime/runtime-report.json dist/runtime-report.json
-          sha256sum dist/camoufox-trace-linux-x86_64.tar.zst > dist/SHA256SUMS
+          cd dist
+          sha256sum camoufox-trace-linux-x86_64.tar.zst > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: camoufox-trace-candidate-linux-x86_64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+  browser-runtime:
+    needs: linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CI_RESULTS_DIR: ${{ github.workspace }}/evidence/upstream
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/checkout@v4
+        with:
+          repository: daijro/camoufox
+          ref: b6205b0ee1e4c2e8e4bb9eb0e084472028a9c6a3
+          path: upstream
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: TonyChen-SH/camoufox-reverse-mcp
+          ref: cbcc57af622c4f91b89e4b97036d085e0a8f0785
+          path: analysis
+          persist-credentials: false
+      - name: Install runtime and SDK prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth xdotool x11-xkb-utils libgtk-3-0 libasound2t64 libdbus-glib-1-2 \
+            libx11-xcb1 libxcb-shm0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 \
+            libxi6 libxrandr2 libxtst6 libpci3 libegl1 libgl1-mesa-dri zstd
+          python -m pip install -r analysis/requirements-mcp.lock -r upstream/ci/requirements.txt
+          python -m pip install --no-deps -e analysis
+          python -m pip install 'playwright==1.62.0' -e upstream/python
+          python upstream/python/scripts/pin-fpgen-model.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: camoufox-trace-candidate-linux-x86_64
+          path: dist
+      - name: Verify and unpack the built browser
+        run: |
+          cd dist
+          sha256sum --check SHA256SUMS
+          mkdir -p ../.browser
+          zstd -d -c camoufox-trace-linux-x86_64.tar.zst | tar -C ../.browser -xf -
+          test -x ../.browser/bin/camoufox-bin
+          test -z "$(find ../.browser -xtype l -print -quit)"
+          echo "CAMOUFOX_BINARY=$(realpath ../.browser/bin/camoufox-bin)" >> "$GITHUB_ENV"
+      - name: Real browser trace and MCP round trip
+        run: xvfb-run -a python tools/runtime_check.py --binary "$CAMOUFOX_BINARY" --output evidence/runtime
+      - name: Upstream checks for affected browser behaviours
+        working-directory: upstream
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          xvfb-run -a python -m ci.run_patch_guards --binary "$CAMOUFOX_BINARY" --only \
+            context-app-version worker-config-reads webgl-live-state webgl-renderer-pair \
+            audio-matches-stock isolated-evaluate getter-cost-parity debug-logging-off
+          xvfb-run -a python -m ci.run_build_tester --binary "$CAMOUFOX_BINARY"
+      - name: Attach runtime validation to the delivery
+        run: cp evidence/runtime/runtime-report.json dist/runtime-report.json
       - uses: actions/upload-artifact@v4
         with:
           name: camoufox-trace-linux-x86_64

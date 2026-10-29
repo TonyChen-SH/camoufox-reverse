@@ -3,6 +3,7 @@
 
 import argparse
 import asyncio
+from contextlib import contextmanager
 from datetime import timedelta
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -36,25 +37,35 @@ def child(binary, mode, output):
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(Handler, directory=str(ROOT / "examples")))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    @contextmanager
+    def launch():
+        if mode == "wrapper":
+            from camoufox.sync_api import Camoufox
+            with Camoufox(executable_path=str(binary), headless=False,
+                          os="linux", env=environment) as browser:
+                yield browser
+        else:
+            with sync_playwright() as playwright:
+                browser = playwright.firefox.launch(executable_path=str(binary), headless=False,
+                                                     env=environment, timeout=60000)
+                try:
+                    yield browser
+                finally:
+                    browser.close()
     try:
-        with sync_playwright() as playwright:
-            browser = playwright.firefox.launch(executable_path=str(binary), headless=False,
-                                                 env=environment, timeout=60000)
-            try:
-                page = browser.new_page()
-                page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="load")
-                page.wait_for_function("document.querySelector('#result').textContent.startsWith('{')",
-                                       timeout=30000)
-                observed = json.loads(page.locator("#result").inner_text())
-                if observed.get("expectedException") != "IndexSizeError":
-                    raise AssertionError(f"Unexpected page exception result: {observed}")
-                if observed.get("afterException") != 1 or observed.get("argumentConversions") != 1:
-                    raise AssertionError("Tracing changed exception recovery or argument coercion")
-                if observed.get("webgl") == "unavailable" or observed.get("webgl2") == "unavailable":
-                    raise RuntimeError("Both WebGL versions are required by this runtime gate")
-                output.write_text(json.dumps(observed, ensure_ascii=True, indent=2) + "\n")
-            finally:
-                browser.close()
+        with launch() as browser:
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="load")
+            page.wait_for_function("document.querySelector('#result').textContent.startsWith('{')",
+                                   timeout=30000)
+            observed = json.loads(page.locator("#result").inner_text())
+            if observed.get("expectedException") != "IndexSizeError":
+                raise AssertionError(f"Unexpected page exception result: {observed}")
+            if observed.get("afterException") != 1 or observed.get("argumentConversions") != 1:
+                raise AssertionError("Tracing changed exception recovery or argument coercion")
+            if observed.get("webgl") == "unavailable" or observed.get("webgl2") == "unavailable":
+                raise RuntimeError("Both WebGL versions are required by this runtime gate")
+            output.write_text(json.dumps(observed, ensure_ascii=True, indent=2) + "\n")
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -96,7 +107,7 @@ def validate(binary, destination):
     report_path = destination / "runtime-report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     try:
-        for mode in ("off", "stack", "cap", "invalid"):
+        for mode in ("off", "stack", "cap", "invalid", "wrapper"):
             observed = destination / f"{mode}-page.json"
             trace = destination / f"{mode}.jsonl"
             outcome = collect([sys.executable, str(Path(__file__).resolve()), "--child",
@@ -146,6 +157,9 @@ def validate(binary, destination):
             if mode == "invalid":
                 if capture.events or not any(item.get("reason") == "invalid_max_events" for item in capture.limits):
                     raise AssertionError("Invalid producer configuration did not fail explicitly")
+            if mode == "wrapper":
+                if summary["integrity"] != "no_known_loss" or not capture.events:
+                    raise AssertionError("Official Camoufox wrapper did not produce a valid trace")
         asyncio.run(check_mcp(destination, len(captures["stack"].events)))
         report["mcp"] = "passed"
         report["status"] = "passed"
@@ -164,7 +178,7 @@ def main():
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--child", action="store_true")
-    parser.add_argument("--mode", choices=("off", "stack", "cap", "invalid"))
+    parser.add_argument("--mode", choices=("off", "stack", "cap", "invalid", "wrapper"))
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     if args.child:
