@@ -1,0 +1,56 @@
+diff --git a/dom/bindings/Codegen.py b/dom/bindings/Codegen.py
+--- a/dom/bindings/Codegen.py
++++ b/dom/bindings/Codegen.py
+@@ -2006,6 +2006,21 @@
+         profiler_label = self.auto_profiler_label()
+         if profiler_label:
+             prologue += indent(profiler_label) + "\n"
++
++        # Trace only the specialized binding entry, not its generic wrapper.
++        member = getattr(self, "method", None) or getattr(self, "attr", None)
++        if member and profiler_label and not member.isStatic():
++            api = self.descriptor.interface.identifier.name + "." + member.identifier.name
++            trace_class = None
++            if "STRING_TEMPLATE_GETTER" in profiler_label and api in ('Navigator.userAgent', 'Navigator.appVersion', 'Navigator.platform', 'Navigator.hardwareConcurrency', 'WorkerNavigator.userAgent', 'WorkerNavigator.appVersion', 'WorkerNavigator.platform', 'WorkerNavigator.hardwareConcurrency', 'Screen.width', 'Screen.height'):
++                trace_class = "AutoTraceGetter"
++            elif "STRING_TEMPLATE_METHOD" in profiler_label and api in ('WebGLRenderingContext.getParameter', 'WebGL2RenderingContext.getParameter', 'CanvasRenderingContext2D.getImageData', 'HTMLCanvasElement.toDataURL', 'AudioBuffer.getChannelData', 'AudioBuffer.copyFromChannel'):
++                trace_class = "AutoTraceMethod"
++            if trace_class:
++                prologue += indent(
++                    'mozilla::camoutrace::%s camoufoxTrace(cx, args, "%s");\n'
++                    % (trace_class, api)
++                )
+ 
+         return prologue
+ 
+diff --git a/dom/bindings/BindingUtils.h b/dom/bindings/BindingUtils.h
+--- a/dom/bindings/BindingUtils.h
++++ b/dom/bindings/BindingUtils.h
+@@ -31,6 +31,7 @@
+ #include "mozilla/UniquePtr.h"
+ #include "mozilla/dom/BindingCallContext.h"
+ #include "mozilla/dom/BindingDeclarations.h"
++#include "mozilla/dom/CamoufoxTrace.h"
+ #include "mozilla/dom/DOMJSClass.h"
+ #include "mozilla/dom/DOMJSProxyHandler.h"
+ #include "mozilla/dom/JSSlots.h"
+diff --git a/dom/bindings/moz.build b/dom/bindings/moz.build
+--- a/dom/bindings/moz.build
++++ b/dom/bindings/moz.build
+@@ -30,6 +30,7 @@
+     "CallbackFunction.h",
+     "CallbackInterface.h",
+     "CallbackObject.h",
++    "CamoufoxTrace.h",
+     "DOMExceptionNames.inc",
+     "DOMJSClass.h",
+     "DOMJSProxyHandler.h",
+@@ -103,6 +104,8 @@
+ 
+ DEFINES["GOOGLE_PROTOBUF_NO_RTTI"] = True
+ DEFINES["GOOGLE_PROTOBUF_NO_STATIC_INITIALIZER"] = True
++
++SOURCES += ["CamoufoxTrace.cpp"]
+ 
+ UNIFIED_SOURCES += [
+     "BindingUtils.cpp",
