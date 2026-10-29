@@ -156,7 +156,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: TonyChen-SH/camoufox-reverse-mcp
-          ref: cbcc57af622c4f91b89e4b97036d085e0a8f0785
+          ref: 8a75443baa3b774882861e149cb7cc13db67bd67
           path: analysis
           persist-credentials: false
       - name: Install runtime and SDK prerequisites

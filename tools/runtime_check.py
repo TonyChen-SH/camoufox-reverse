@@ -8,6 +8,7 @@ from datetime import timedelta
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -92,10 +93,22 @@ async def check_mcp(trace_root, expected):
                 "path": "stack.jsonl", "api": "WorkerNavigator.userAgent", "limit": 10})
             if events.isError or not events.structuredContent["matched"]:
                 raise AssertionError("MCP lost the real Worker events")
+            pixels = await session.call_tool("get_trace_events", {
+                "path": "stack.jsonl", "api": "CanvasRenderingContext2D.getImageData", "limit": 1000})
+            if pixels.isError or not any(
+                event["args"] and event["args"][0].get("value") == 0
+                and math.copysign(1, event["args"][0]["value"]) < 0
+                for event in pixels.structuredContent["events"]
+            ):
+                raise AssertionError("MCP structured events lost the native negative-zero argument")
             comparison = await session.call_tool("compare_traces", {
                 "baseline": "off.jsonl", "candidate": "stack.jsonl"})
             if comparison.isError or not comparison.structuredContent["call_site_changes"]:
                 raise AssertionError("MCP failed to compare the real captures")
+            reordered = await session.call_tool("compare_traces", {
+                "baseline": "stack.jsonl", "candidate": "stack-reordered.jsonl"})
+            if reordered.isError or reordered.structuredContent["call_site_changes"] != []:
+                raise AssertionError("MCP invented call-site changes after reordering real API records")
 
 
 def validate(binary, destination):
@@ -142,6 +155,22 @@ def validate(binary, destination):
                 if not any(event["api"] == "CanvasRenderingContext2D.getImageData" and event["threw"]
                            for event in fixture_events):
                     raise AssertionError("Native exception event was not captured")
+                if not any(
+                    event["api"] == "CanvasRenderingContext2D.getImageData" and event["args"]
+                    and event["args"][0].get("value") == 0
+                    and math.copysign(1, event["args"][0]["value"]) < 0
+                    for event in fixture_events
+                ):
+                    raise AssertionError("Native getImageData arguments lost negative zero")
+                mime_types = {"image/png", "image/jpeg", "image/webp"}
+                encodings = [event for event in fixture_events
+                             if event["api"] == "HTMLCanvasElement.toDataURL" and event["args"]
+                             and event["args"][0].get("value") in mime_types]
+                if ({event["args"][0]["value"] for event in encodings} != mime_types
+                    or len({json.dumps(event["source"], sort_keys=True) for event in encodings}) != 1
+                    or len({event["result"]["value"] for event in encodings
+                            if not event["threw"] and event["result"]["type"] == "string"}) < 2):
+                    raise AssertionError("The repeated toDataURL call site lacks distinct real results")
                 if not any(any(argument.get("value") == "image/png\0中🦊%o %O %j %% %s" for argument in event["args"])
                            for event in fixture_events):
                     raise AssertionError("UTF-8/NUL/percent argument was not preserved")
@@ -163,6 +192,11 @@ def validate(binary, destination):
             if mode == "wrapper":
                 if summary["integrity"] != "no_known_loss" or not capture.events:
                     raise AssertionError("Official Camoufox wrapper did not produce a valid trace")
+        records = [(line, json.loads(line).get("event") == "api")
+                   for line in (destination / "stack.jsonl").read_text().splitlines(keepends=True)]
+        api_records = iter(line for line, is_api in reversed(records) if is_api)
+        (destination / "stack-reordered.jsonl").write_text(
+            "".join(next(api_records) if is_api else line for line, is_api in records))
         asyncio.run(check_mcp(destination, len(captures["stack"].events)))
         report["mcp"] = "passed"
         report["status"] = "passed"

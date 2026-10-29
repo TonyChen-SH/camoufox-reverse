@@ -11,8 +11,11 @@
   canvas.width = canvas.height = 8;
   const context = canvas.getContext("2d");
   context.fillRect(1, 1, 4, 4);
-  observed.pixelType = context.getImageData(0, 0, 1, 1).constructor.name;
-  observed.dataURLLength = canvas.toDataURL().length;
+  observed.pixelType = context.getImageData(-0, 0, 1, 1).constructor.name;
+  observed.dataURLLengths = [];
+  for (const type of ["image/png", "image/jpeg", "image/webp"]) {
+    observed.dataURLLengths.push(canvas.toDataURL(type).length);
+  }
   try {
     context.getImageData(0, 0, 0, 0);
   } catch (error) {
