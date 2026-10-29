@@ -170,6 +170,7 @@ jobs:
           python -m pip install --no-deps -e analysis
           python -m pip install 'playwright==1.62.0' -e upstream/python
           python upstream/python/scripts/pin-fpgen-model.py
+          npm ci --prefix upstream/browser/tests/build-tester
       - uses: actions/download-artifact@v4
         with:
           name: camoufox-trace-candidate-linux-x86_64
