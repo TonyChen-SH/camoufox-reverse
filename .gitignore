@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.venv/
+.test-source/
+*.jsonl
+*.log

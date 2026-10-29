@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "status": "experimental-unbuilt",
+  "camoufox": {
+    "repository": "https://github.com/daijro/camoufox",
+    "commit": "b6205b0ee1e4c2e8e4bb9eb0e084472028a9c6a3"
+  },
+  "firefox": {
+    "repository": "https://github.com/mozilla-firefox/firefox",
+    "version": "158.0.1",
+    "commit": "9378fbc58660847fbc02c3486a0ecd6049978e25",
+    "tag": "FIREFOX_158_0_1_RELEASE"
+  },
+  "files": {
+    "dom/bindings/Codegen.py": {
+      "before": "9417c3f076288f9a828ec47ec215aa816135799d",
+      "after": "45958a05548989fa60ca14ef89333a7ec58ea2fc"
+    },
+    "dom/bindings/BindingUtils.h": {
+      "before": "5b7a6a3b9513f359d95a62d19c8080e273797b50",
+      "after": "da6f8e49f5ae10429e0b3d6645a129d6135ac792"
+    },
+    "dom/bindings/moz.build": {
+      "before": "9a13472f2e3c422da0a0c63cbb068907500ee2d1",
+      "after": "3b3de7dbf9560c5c2b097ffd9310cb1519d40938"
+    }
+  },
+  "additions": {
+    "dom/bindings/CamoufoxTrace.cpp": "0efeb9815ab11c084799bed007708b360cc029573a91c858baf3bb723023fabd",
+    "dom/bindings/CamoufoxTrace.h": "1a0bb1973d01cd346b1f7ba3da940ebd4965ae8ebcb175efcf04e9761b500e88",
+    "dom/bindings/CamoufoxTraceBuffer.h": "96466694bb9c895f7d1591225bb42fa45e78af863fa357f2b692feebe9c05428"
+  },
+  "coverage": {
+    "Navigator.userAgent": "get",
+    "Navigator.appVersion": "get",
+    "Navigator.platform": "get",
+    "Navigator.hardwareConcurrency": "get",
+    "WorkerNavigator.userAgent": "get",
+    "WorkerNavigator.appVersion": "get",
+    "WorkerNavigator.platform": "get",
+    "WorkerNavigator.hardwareConcurrency": "get",
+    "Screen.width": "get",
+    "Screen.height": "get",
+    "WebGLRenderingContext.getParameter": "call",
+    "WebGL2RenderingContext.getParameter": "call",
+    "CanvasRenderingContext2D.getImageData": "call",
+    "HTMLCanvasElement.toDataURL": "call",
+    "AudioBuffer.getChannelData": "call",
+    "AudioBuffer.copyFromChannel": "call"
+  },
+  "patch_sha256": "37dcc31ab9fecc85867b5db1d4409945e818f6bf496e4e42de096c687d84d98e"
+}
