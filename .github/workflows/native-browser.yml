@@ -1,0 +1,132 @@
+name: Native browser build and runtime
+on:
+  pull_request:
+    paths:
+      - 'additions/**'
+      - 'patches/**'
+      - 'tools/**'
+      - 'examples/**'
+      - 'baseline.json'
+      - '.github/workflows/native-browser.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-browser-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      BUILD_TARGET: linux,x86_64
+      CARGO_BUILD_JOBS: '1'
+      MOZBUILD_STATE_PATH: ${{ github.workspace }}/.mozbuild
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reclaim build space
+        uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+          remove-cached-tools: 'true'
+          remove-swapfile: 'true'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/checkout@v4
+        with:
+          repository: daijro/camoufox
+          ref: b6205b0ee1e4c2e8e4bb9eb0e084472028a9c6a3
+          path: upstream
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: TonyChen-SH/camoufox-reverse-mcp
+          ref: cbcc57af622c4f91b89e4b97036d085e0a8f0785
+          path: analysis
+          persist-credentials: false
+      - name: Install build and browser prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            aria2 msitools p7zip-full ccache libsqlite3-dev clang-18 lld-18 \
+            xvfb xauth libgtk-3-0 libasound2t64 libdbus-glib-1-2 libx11-xcb1 \
+            libxcb-shm0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 \
+            libxi6 libxrandr2 libxtst6 libpci3 libegl1 libgl1-mesa-dri zstd
+          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-18 100
+          sudo fallocate -l 24G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+          df -h /
+          python -m pip install -r analysis/requirements-mcp.lock
+          python -m pip install --no-deps -e analysis
+          python -m pip install 'playwright==1.62.0'
+      - name: Restore native compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.ccache
+            .mozbuild
+          key: native-158-linux-${{ hashFiles('additions/**', 'patches/**', 'baseline.json') }}
+          restore-keys: native-158-linux-
+      - name: Prepare complete Camoufox source
+        working-directory: upstream
+        run: |
+          ccache -M 4G
+          python3 -m ci.run_prepare
+      - name: Apply and compile native tracer
+        run: |
+          python tools/apply.py --source upstream/browser/camoufox-158.0.1-beta.34
+          make -C upstream/browser build
+      - name: Save native compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.ccache
+            .mozbuild
+          key: native-158-linux-${{ hashFiles('additions/**', 'patches/**', 'baseline.json') }}
+      - name: Stage complete browser resources
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          make -C upstream/browser stage-fonts
+          src=upstream/browser/camoufox-158.0.1-beta.34/obj-x86_64-pc-linux-gnu/dist/bin
+          test -x "$src/camoufox-bin"
+          cp upstream/browser/settings/properties.json "$src/properties.json"
+          python upstream/browser/scripts/fetch-ubo.py stage "$src"
+          for required in camoufox.cfg fonts/groups.json fontconfig/linux addons/UBO/manifest.json; do
+            test -e "$src/$required"
+          done
+          echo "CAMOUFOX_BINARY=$(realpath "$src/camoufox-bin")" >> "$GITHUB_ENV"
+      - name: Real browser trace and MCP round trip
+        run: xvfb-run -a python tools/runtime_check.py --binary "$CAMOUFOX_BINARY" --output evidence/runtime
+      - name: Package tested browser
+        run: |
+          mkdir -p dist
+          src=upstream/browser/camoufox-158.0.1-beta.34/obj-x86_64-pc-linux-gnu/dist
+          tar -C "$src" --dereference -cf - bin | zstd -3 -T0 -o dist/camoufox-trace-linux-x86_64.tar.zst
+          cp baseline.json dist/baseline.json
+          cp evidence/runtime/runtime-report.json dist/runtime-report.json
+          sha256sum dist/camoufox-trace-linux-x86_64.tar.zst > dist/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: camoufox-trace-linux-x86_64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-browser-evidence
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14

@@ -26,7 +26,7 @@
     }
   },
   "additions": {
-    "dom/bindings/CamoufoxTrace.cpp": "0efeb9815ab11c084799bed007708b360cc029573a91c858baf3bb723023fabd",
+    "dom/bindings/CamoufoxTrace.cpp": "c7d75ffc87de0b2364fe9183746050e3842110c11239e3a7058a5cc7cfca1192",
     "dom/bindings/CamoufoxTrace.h": "1a0bb1973d01cd346b1f7ba3da940ebd4965ae8ebcb175efcf04e9761b500e88",
     "dom/bindings/CamoufoxTraceBuffer.h": "96466694bb9c895f7d1591225bb42fa45e78af863fa357f2b692feebe9c05428"
   },

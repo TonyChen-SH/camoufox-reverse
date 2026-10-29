@@ -18,6 +18,11 @@
   } catch (error) {
     observed.expectedException = error.name;
   }
+  observed.afterException = context.getImageData(0, 0, 1, 1).width;
+  observed.unicodeDataURLLength = canvas.toDataURL("image/png\u0000中🦊").length;
+  let conversions = 0;
+  canvas.toDataURL({toString() { conversions++; return "image/png"; }});
+  observed.argumentConversions = conversions;
   for (const kind of ["webgl", "webgl2"]) {
     const gl = document.createElement("canvas").getContext(kind);
     observed[kind] = gl ? gl.getParameter(gl.VERSION) : "unavailable";

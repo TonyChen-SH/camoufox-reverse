@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <new>
 #include <string_view>
@@ -23,6 +24,7 @@
 
 #include "jsapi.h"
 #include "js/Class.h"
+#include "js/ColumnNumber.h"
 #include "js/Exception.h"
 #include "js/GlobalObject.h"
 #include "js/Object.h"
