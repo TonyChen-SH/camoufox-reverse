@@ -229,6 +229,10 @@ def postgres_elements(source_root, binary, data, output, env, original):
     subprocess.run(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-f",
                     str(source_root / "post-processor/postgres_schema.sql")],
                    env=element_env, stdout=subprocess.DEVNULL, check=True)
+    if original:
+        # The unchanged upstream expects this table from its external VPC DB,
+        # as in the original baseline fixture. The adapter must deliver it.
+        sql("CREATE TABLE submissions(id uuid PRIMARY KEY,url text NOT NULL)", element_env)
     sql("INSERT INTO submissions VALUES ('" + oracle.SUBMISSION + "','https://example.test')", element_env)
     info = oracle.execute([binary, "-aggs", "features+create_element", "-submissionid", oracle.SUBMISSION,
                            "-output", "postgresql", data / "vv8-inherited-1-1-main.0.log"],
