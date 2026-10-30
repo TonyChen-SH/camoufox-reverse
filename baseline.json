@@ -26,11 +26,11 @@
     },
     "js/src/frontend/BytecodeEmitter.h": {
       "before": "6e3a4d21f48298f40f70cce9243b7e049e9bd99b",
-      "after": "5071f77dc1759ee424f58ad893f7b6bd70cb39a4"
+      "after": "30240c4e6b6152dbcc8052d3a5cd6b902c619608"
     },
     "js/src/frontend/BytecodeEmitter.cpp": {
       "before": "c33faa1ee2613a18544adc3a4b1a659b8edbf2eb",
-      "after": "205501d274e3ae791fc40623ed444d7ef95086b4"
+      "after": "34c8899e40f73708388936973bb899cfac4a1ef3"
     },
     "js/src/vm/SelfHosting.cpp": {
       "before": "84c4d2546d38434ef4d820d94a16283c9f96c659",
@@ -46,7 +46,7 @@
     },
     "js/src/frontend/StencilXdr.cpp": {
       "before": "232b821798249e6633e25decdab97b9ffe820f78",
-      "after": "42ad9d8425f30854d815cfc35729a51d23d1ef0e"
+      "after": "83146de76192da0816f03963ad86148ff30c1a12"
     },
     "js/public/CallAndConstruct.h": {
       "before": "2a39552f6d37a0ef77640b4ec7d4ee192aebdba3",
@@ -58,7 +58,7 @@
     },
     "dom/bindings/BindingUtils.cpp": {
       "before": "6cbfbceb534aa4dd1b7ef868f96aa87c334ada05",
-      "after": "b2014b9c615c0179116f5050da0dfff97ea1c54b"
+      "after": "69b779de06196f70c2be6a277b102c8306b3dcf4"
     },
     "js/src/vm/Interpreter.cpp": {
       "before": "940e584794d8448ed9b53848f864bd07d16e5f3a",
@@ -87,13 +87,29 @@
     "xpcom/base/CycleCollectedJSRuntime.cpp": {
       "before": "f4858b8e65e0961ffa8bd075a9b02fd17bacde4a",
       "after": "7fde08c335682d870579628b1d06b0f71bbdf063"
+    },
+    "js/src/frontend/PropOpEmitter.h": {
+      "before": "7ab9fe6de138678e6dd006c157f5434de98e201f",
+      "after": "f334bbe89879335f0d610e2f36cdb1920b86a6d2"
+    },
+    "js/src/frontend/PropOpEmitter.cpp": {
+      "before": "c9238e73b96284b2a239c41eba813b2b4ad12a7a",
+      "after": "f767c5b72a566c413dc61071b878aa9996d02660"
+    },
+    "js/src/frontend/ElemOpEmitter.h": {
+      "before": "ba252fae8093ef81d5707b7e2ef55602e1d17805",
+      "after": "e6e95e84d4e4748c7029ebca8c939c852fc274d8"
+    },
+    "js/src/frontend/ElemOpEmitter.cpp": {
+      "before": "cc4162ec9ecb94e9a766ee27e26f3e57274b6e3a",
+      "after": "facb8923b71cce34249e6c8949a1e4e0e58af75c"
     }
   },
   "additions": {
     "dom/bindings/CamoufoxTrace.cpp": "4c33ced9cc1170e09f0f01151e2b9c207cb7d7e30e142844e0bbd1d0a70d92a2",
     "dom/bindings/CamoufoxTrace.h": "a932148b22b80ad39d52a044644e41acec12e269965eb9951acc20cec6325244",
     "js/public/experimental/CamoufoxTraceBuffer.h": "926b25c11fa4c8708f85442bc5a10ed4de8b2752e128e5e58e944cd22bd7ade9",
-    "js/src/vm/CamoufoxMonitor.cpp": "a98009d81807570216c9cba826bc66a547f7674869ad79e829e9218f1c7fd1f9",
+    "js/src/vm/CamoufoxMonitor.cpp": "c6ee4a9e3ad2015a51f0c9c68c0991f430ae4c56d6ea76deefc6d6a5fd7c0041",
     "js/src/vm/CamoufoxMonitor.h": "9e4d664e6de919e13b3f3daa86b3866f456d6e1d731edeecc08c7394c41a524d",
     "js/src/vm/CamoufoxMonitorBuffer.h": "d35276d2f9aa33c4d3f4fbea81b105ce90a3f2496fa2ae050c9404116ee0b473"
   },
@@ -119,7 +135,7 @@
       "Privileged system realms and native calls without a scripted caller are excluded"
     ]
   },
-  "patch_sha256": "d74f42c2d2712665202712cb41767b281e107dda7c85811363cf0c61044c2f75",
+  "patch_sha256": "9005e22cb0709c4b962574a7ad34f6d97d6e81d905bdcac0bedffe5171c6592a",
   "engine": {
     "reference": {
       "repository": "https://github.com/wspr-ncsu/visiblev8",
@@ -128,9 +144,10 @@
     },
     "enabled_by": "CAMOUFOX_ENGINE_TRACE=1",
     "wire_format": "VisibleV8 ASCII in schema-1 vv8 transport fragments",
-    "property_filter": "global, registered DOM prototype classes, native DOM objects and native DOM/window proxies",
+    "property_filter": "global, registered DOM prototype/namespace classes, native DOM/window proxies and their native Wrapper targets",
     "default_system_realms": "exclude current system realm; callers are not a separate permission filter",
     "native_boundary": "registered embedding JSNative pointers; explicit eval/dynamic Function hooks",
-    "status": "experimental"
+    "status": "experimental",
+    "source_position": "UTF-16 Firefox AST expression start or caller PC; not V8 token-position equivalence"
   }
 }

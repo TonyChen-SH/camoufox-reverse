@@ -32,6 +32,7 @@
 #include "js/PropertyDescriptor.h"
 #include "js/Proxy.h"
 #include "js/String.h"
+#include "js/Wrapper.h"
 #include "js/friend/WindowProxy.h"
 #include "proxy/DOMProxy.h"
 #include "vm/ArrayObject.h"
@@ -199,9 +200,7 @@ bool AppendString(JSContext* cx, JS::HandleString string,
   return true;
 }
 
-bool HostObject(JS::HandleValue value) {
-  if (!value.isObject()) return false;
-  JSObject* object = &value.toObject();
+bool DirectHostObject(JSObject* object) {
   const JSClass* clasp = object->getClass();
   if (object->is<js::GlobalObject>() || clasp->isDOMClass() ||
       js::IsWindowProxy(object)) {
@@ -216,12 +215,37 @@ bool HostObject(JS::HandleValue value) {
          family == js::GetDOMRemoteProxyHandlerFamily();
 }
 
+JSObject* HostTarget(JSObject* object) {
+  // Resolve native wrappers for metadata without invoking property traps.
+  JSObject* target = js::IsWrapper(object)
+                         ? js::UncheckedUnwrapWithoutExpose(object)
+                         : object;
+  return target && DirectHostObject(target) ? target : nullptr;
+}
+
+bool HostObject(JS::HandleValue value) {
+  return value.isObject() && HostTarget(&value.toObject());
+}
+
 bool AppendValue(JSContext* cx, JS::HandleValue value, Vv8Record& record,
                   bool expand = false);
 
 bool AppendClass(JSContext* cx, JS::HandleObject object, Vv8Record& record,
                   bool* plainConstructor) {
-  const char* fallback = object->getClass()->name;
+  JS::RootedObject classObject(cx, HostTarget(object));
+  if (!classObject) classObject = object;
+  const JSClass* clasp = classObject->getClass();
+  if (js::IsWindowProxy(classObject)) {
+    clasp = js::ToWindowIfWindowProxy(classObject)->getClass();
+  }
+  const char* fallback = clasp->name;
+  if (classObject->is<js::ProxyObject>() &&
+      classObject->as<js::ProxyObject>().handler()->family() ==
+          js::GetDOMRemoteProxyHandlerFamily()) {
+    fallback = classObject->as<js::ProxyObject>().handler()->className(
+        cx, classObject);
+  }
+  // Descriptor inspection and expansion stay on the original object.
   *plainConstructor = object->is<js::PlainObject>() ||
                       object->is<js::ArrayObject>();
   if (*plainConstructor) {
@@ -523,8 +547,8 @@ void js::CamoufoxMonitorNative(JSContext* cx, const JS::CallArgs& args) {
       observed = gHostNatives.count(native);
     }
   } else {
-    JS::RootedValue callee(cx, args.calleev());
-    observed = HostObject(callee);
+    // A native wrapper forwards to another call boundary that records its target.
+    observed = DirectHostObject(&args.callee());
   }
   if (observed) Call(cx, args, false, false);
 }

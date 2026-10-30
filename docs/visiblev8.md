@@ -25,9 +25,14 @@ python -m camoufox_trace_mcp export-vv8 traces/engine.jsonl --output traces/vv8-
 - 点属性和索引属性的读取、写入、复合赋值和增减，通过字节码发射器调用引擎私有 native intrinsic；先复制已有栈值，再执行原操作，不重新求值 receiver/key/RHS。
 - `Reflect.get/set/has` 显式到达同一观察器；数字属性键保持 `ToPropertyKey` 后的字符串形式。存在性查询按参考格式记录为 `g`，不制造返回布尔值。
 - WebIDL 构建宿主函数时注册稳定 native 代码指针，方法、静态成员、构造、旧式工厂以及可调用 DOM proxy 在实际引擎调用边界观察。普通 Math/Array/Object builtin 不因此变成宿主调用。
+- 接口 prototype 与 namespace 注册其实际 JSClass；WindowProxy 使用关联 Window 的原生类名。跨进程 DOM remote proxy 只在其原生 handler family 内读取 final `className`，按真实 prototype ID 区分 Window、Location 等接口；普通 Proxy 保留其自身类型，原生 wrapper 保留原对象 identity。
 - 监控开启时，native、bound、call/apply 和 class-hook 的直接 CallIC 路径不附着；Ion 通用 native ABI 路径转入现有 VM 调用。普通脚本仍可使用 JIT；关闭时不增加监控字节码或该运行跳转。
 - direct/indirect eval 和动态 Function 使用专用入口。动态 Function 按参考约定记录 `c`，即使使用 `new Function`。
 - 字节码转码 build ID 在开启时增加模式后缀，防止误用未插桩缓存；关闭时保留原 ID。
+
+远程类型来自固定版本的 [RemoteObjectProxyBase::className](https://github.com/mozilla-firefox/firefox/blob/9378fbc58660847fbc02c3486a0ecd6049978e25/dom/bindings/RemoteObjectProxy.cpp#L121)，它直接查原生接口名称表；[RemoteOuterWindowProxy](https://github.com/mozilla-firefox/firefox/blob/9378fbc58660847fbc02c3486a0ecd6049978e25/dom/base/RemoteOuterWindowProxy.cpp#L29) 指定 `Window` prototype ID。此路径保留 wrapper 身份，未读取目标属性。
+
+跨 compartment 观察只解开真实原生 Wrapper 来检查宿主元数据；普通跨 realm Object/Array 的包装不展开。运行用例通过用户 click 打开同源 popup，在其 iframe 中验证 foreign Window/Navigator/DOM；另以两个 loopback 主机名检查跨站 frame 的 `Window.closed` 类型，并报告实际 PID 是否跨进程。未观测到跨进程时，不能把同进程结果称为 Fission 运行证据。
 
 只添加 VM `GetProperty` 或 IC 附着日志不能覆盖每次执行。本实现的浏览器门禁要求热循环逐次计数，并核对关闭/开启后的页面结果。
 
@@ -35,13 +40,19 @@ python -m camoufox_trace_mcp export-vv8 traces/engine.jsonl --output traces/vv8-
 
 标准记录包括 `~` runtime/isolate、`@` 文档或 Worker href/安全令牌、`$` 完整源码与原生 eval 父来源、`!` 活跃脚本，以及 `g/s/c/n`。脚本按首次观察惰性注册，父来源先于子脚本；不保证枚举未执行监控操作的脚本。线程标识是进程内唯一的线程流 ID，不是 frame/request ID。
 
-源码、参数不使用 WebIDL 通道的短字符串摘要。原始字段按 UTF-16 码元转义，保留控制字符、冒号、反斜杠、CRLF 和非 BMP 字符；源码位置保留 SpiderMonkey 的源位置并转成 UTF-16 offset。不同引擎的具体定位点可能不同，不能把 offset 数值相等当作跨引擎行为相等。
+`@` 的 href 来自原生文档 URI 或 Worker ClientInfo，第二字段使用 Firefox principal 的 `GetOriginNoSuffix` 文本；它不是 V8 security token 对象的逐值复制。对象身份、runtime 指针及脚本 ID 都属于各自引擎的运行实例，不能跨浏览器按数值匹配。
+
+源码、参数不使用 WebIDL 通道的短字符串摘要。原始字段按 UTF-16 码元转义，保留控制字符、冒号、反斜杠、CRLF 和非 BMP 字符。普通属性表达式保存所属 Firefox AST 的起点，跨 receiver、key 和 RHS 发射仍保留该坐标；合成访问及 native 调用使用可得的 caller-PC 位置。
+
+offset 使用 UTF-16 码元，但定位约定不等于 V8：V8 的普通点属性可定位到属性名、计算属性定位到 `[`、写入可定位到赋值运算符。Firefox 嵌套成员表达式还可能共享起点。保留各引擎原始位置，不伪造相同 offset，也不把数值相等当成行为等价。
 
 每条原始记录由一个或多个 `CAMOUFOX_TRACE ` JSON envelope 承载，字段为 `schema:1,event:"vv8",pid,tid,record,part,final,data`。每个物理片段不超过 4096 字节；完整原始记录不含终止换行。分析器严格重组并按线程导出标准 VV8 日志，保留原始字段，不把缺段修补成完整日志。浏览器继续使用继承的 stderr 与内容沙箱。
 
 ## 语义与验证边界
 
 `g/s/c/n` 记录操作尝试，没有桌面 VV8 未提供的返回值或成功状态。WebIDL 通道另有结果、异常和耗时；分析时必须区分 `engine` 与 `binding`，避免重复计数。
+
+一次属性读取或写入不能推定必有额外的 getter/setter `c`。V8 的模板访问器、IC、TurboFan/Maglev 与 Firefox 的 native 调用、DOM IC/专用 ABI 使用不同路径；描述符查询还可能在 V8 中实例化访问器并改变后续路径。属性 `g/s` 与显式宿主调用分别核验，不能把某个冷路径的 `c` 数量外推到所有热路径。
 
 对象使用 GC 稳定身份与原生类名/安全可得的构造名。调用参数中的普通 Object/Array可展开一层自有可枚举数据属性；不执行访问器，也不触发普通 JS proxy 的用户 trap。参考序列化器在某些 proxy/interceptor 情况会执行操作，本实现保留安全边界并明确这一差异。函数、symbol、正则和对象快照仍是有损表示。
 

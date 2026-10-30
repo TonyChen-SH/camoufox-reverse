@@ -3,6 +3,10 @@
 PATHS = (
     "js/src/frontend/BytecodeEmitter.h",
     "js/src/frontend/BytecodeEmitter.cpp",
+    "js/src/frontend/PropOpEmitter.h",
+    "js/src/frontend/PropOpEmitter.cpp",
+    "js/src/frontend/ElemOpEmitter.h",
+    "js/src/frontend/ElemOpEmitter.cpp",
     "js/src/vm/SelfHosting.cpp",
     "js/src/builtin/Reflect.cpp",
     "js/src/builtin/Reflect.js",
@@ -12,14 +16,16 @@ PATHS = (
 OBSERVE_DECLARATION = '''  [[nodiscard]] bool emitCamoufoxObserve(uint8_t operation, unsigned receiverDepth,
                            mozilla::Maybe<GCThingIndex> keyAtom,
                            unsigned keyDepth,
-                           mozilla::Maybe<unsigned> valueDepth);
+                           mozilla::Maybe<unsigned> valueDepth,
+                           const mozilla::Maybe<uint32_t>& sourceCoordOffset = mozilla::Nothing());
 
 '''
 
 OBSERVE_HELPER = '''bool BytecodeEmitter::emitCamoufoxObserve(
     uint8_t operation, unsigned receiverDepth,
     mozilla::Maybe<GCThingIndex> keyAtom, unsigned keyDepth,
-    mozilla::Maybe<unsigned> valueDepth) {
+    mozilla::Maybe<unsigned> valueDepth,
+    const mozilla::Maybe<uint32_t>& sourceCoordOffset) {
   if (emitterMode == SelfHosting || !js::CamoufoxMonitorEnabled()) {
     return true;
   }
@@ -49,7 +55,7 @@ OBSERVE_HELPER = '''bool BytecodeEmitter::emitCamoufoxObserve(
   } else if (!emit1(JSOp::Undefined)) {
     return false;
   }
-  return emitCall(JSOp::Call, 4) && emit1(JSOp::Pop);
+  return emitCall(JSOp::Call, 4, sourceCoordOffset) && emit1(JSOp::Pop);
 }
 
 '''
@@ -58,7 +64,7 @@ ATOM_HOOK = '''  switch (op) {
     case JSOp::GetProp:
     case JSOp::GetPropSuper:
       if (!emitCamoufoxObserve(0, 0, mozilla::Some(atomIndex), 0,
-                              mozilla::Nothing())) {
+                              mozilla::Nothing(), sourceCoordOffset)) {
         return false;
       }
       break;
@@ -67,7 +73,7 @@ ATOM_HOOK = '''  switch (op) {
     case JSOp::SetPropSuper:
     case JSOp::StrictSetPropSuper:
       if (!emitCamoufoxObserve(1, 1, mozilla::Some(atomIndex), 0,
-                              mozilla::Some(0u))) {
+                              mozilla::Some(0u), sourceCoordOffset)) {
         return false;
       }
       break;
@@ -79,33 +85,33 @@ ATOM_HOOK = '''  switch (op) {
 ELEMENT_HOOK = '''  switch (op) {
     case JSOp::GetElem:
       if (!emitCamoufoxObserve(0, 1, mozilla::Nothing(), 0,
-                              mozilla::Nothing())) {
+                              mozilla::Nothing(), sourceCoordOffset)) {
         return false;
       }
       break;
     case JSOp::GetElemSuper:
       if (!emitCamoufoxObserve(0, 0, mozilla::Nothing(), 1,
-                              mozilla::Nothing())) {
+                              mozilla::Nothing(), sourceCoordOffset)) {
         return false;
       }
       break;
     case JSOp::SetElem:
     case JSOp::StrictSetElem:
       if (!emitCamoufoxObserve(1, 2, mozilla::Nothing(), 1,
-                              mozilla::Some(0u))) {
+                              mozilla::Some(0u), sourceCoordOffset)) {
         return false;
       }
       break;
     case JSOp::SetElemSuper:
     case JSOp::StrictSetElemSuper:
       if (!emitCamoufoxObserve(1, 1, mozilla::Nothing(), 2,
-                              mozilla::Some(0u))) {
+                              mozilla::Some(0u), sourceCoordOffset)) {
         return false;
       }
       break;
     case JSOp::In:
       if (!emitCamoufoxObserve(2, 0, mozilla::Nothing(), 1,
-                              mozilla::Nothing())) {
+                              mozilla::Nothing(), sourceCoordOffset)) {
         return false;
       }
       break;
@@ -135,9 +141,28 @@ SELF_HOSTING_GATE = '''    if (!js::CamoufoxMonitorEnabled()) {
         return false;
       }
       if (calleeName == observer) {
-        return valueUsage == ValueUsage::IgnoreValue || emit1(JSOp::Undefined);
+        return emit1(JSOp::Undefined);
       }
     }
+'''
+
+
+SELF_HOSTING_STATEMENT_GATE = '''  if (!wantval && emitterMode == SelfHosting &&
+      !js::CamoufoxMonitorEnabled() && expr->isKind(ParseNodeKind::CallExpr)) {
+    CallNode* call = &expr->as<CallNode>();
+    ParseNode* callee = call->callee();
+    if (call->callOp() == JSOp::Call && callee->isKind(ParseNodeKind::Name)) {
+      constexpr char intrinsic[] = "CamoufoxObserve";
+      auto observer = parserAtoms().internAscii(fc, intrinsic,
+                                                sizeof(intrinsic) - 1);
+      if (!observer) {
+        return false;
+      }
+      if (callee->as<NameNode>().name() == observer) {
+        return true;
+      }
+    }
+  }
 '''
 
 
@@ -147,11 +172,65 @@ def replace_once(text, old, new):
     return text.replace(old, new, 1)
 
 
+def replace_in_function(text, name, old, new):
+    signature = f"bool BytecodeEmitter::{name}("
+    if text.count(signature) != 1:
+        raise ValueError("Engine function anchor is missing or ambiguous; port the patch first")
+    begin = text.index(signature)
+    end = text.index("\n}\n", begin) + 3
+    return text[:begin] + replace_once(text[begin:end], old, new) + text[end:]
+
+
+def operation_coordinates(text):
+    for name, indent, emitter in (
+        ("emitPropIncDec", "  ", "poe"),
+        ("emitDestructuringLHSRef", "      ", "poe"),
+        ("emitAssignmentOrInit", "      ", "poe->"),
+        ("emitShortCircuitAssignment", "      ", "poe->"),
+        ("emitCalleeAndThis", "      ", "poe"),
+        ("emitOptionalDotExpression", "  ", "poe"),
+        ("emitTree", "      ", "poe"),
+    ):
+        access = emitter if emitter.endswith("->") else emitter + "."
+        anchor = indent + f"if (!{access}prepareForObj()) {{\n"
+        text = replace_in_function(text, name, anchor,
+                                   indent + f"{access}setCamoufoxSourceCoord(Some(prop->pn_pos.begin));\n" + anchor)
+    for name in ("emitElemObjAndKey", "emitOptionalElemExpression"):
+        anchor = "  if (!eoe.prepareForObj()) {\n"
+        text = replace_in_function(text, name, anchor,
+                                   "  eoe.setCamoufoxSourceCoord(Some(elem->pn_pos.begin));\n" + anchor)
+    anchor = "    if (!emitAtomOp(JSOp::GetProp, pndot->key().atom())) {\n"
+    text = replace_in_function(text, "emitPropLHS", anchor,
+                               "    if (!emitAtomOp(JSOp::GetProp, pndot->key().atom(),\n"
+                               "                    Some(pndot->pn_pos.begin))) {\n")
+    anchor = "    if (!emit1(op)) {\n"
+    text = replace_in_function(text, "emitLeftAssociative", anchor,
+                               "    if (!emit1(op, op == JSOp::In ? Some(node->pn_pos.begin) : Nothing())) {\n")
+    for name, owner in (("emitTree", "pn"), ("emitOptionalTree", "pn"),
+                        ("emitCalleeAndThis", "callee"), ("emitOptionalCalleeAndThis", "callee")):
+        text = replace_in_function(text, name, "if (!emitArgumentsLength()) {",
+                                   f"if (!emitArgumentsLength(Some({owner}->pn_pos.begin))) {{")
+    text = replace_in_function(text, "emitArgumentsLength", "  if (!poe.prepareForObj()) {\n",
+                               "  poe.setCamoufoxSourceCoord(sourceCoordOffset);\n"
+                               "  if (!poe.prepareForObj()) {\n")
+    return text
+
+
 def transform(path, data):
     text = data.decode("utf-8")
     if path == "js/src/frontend/BytecodeEmitter.h":
         anchor = "  [[nodiscard]] bool emitCheckIsCallable();\n"
         text = replace_once(text, anchor, OBSERVE_DECLARATION + anchor)
+        for name, arguments in (("emit1", "JSOp op"),
+                                ("emitAtomOp", "JSOp op, TaggedParserAtomIndex atom"),
+                                ("emitAtomOp", "JSOp op, GCThingIndex atomIndex"),
+                                ("emitElemOpBase", "JSOp op"),
+                                ("emitArgumentsLength", "")):
+            anchor = f"  [[nodiscard]] bool {name}({arguments});\n"
+            prefix = arguments + ",\n      " if arguments else "\n      "
+            text = replace_once(text, anchor,
+                                f"  [[nodiscard]] bool {name}({prefix}"
+                                "const mozilla::Maybe<uint32_t>& sourceCoordOffset = mozilla::Nothing());\n")
     elif path == "js/src/frontend/BytecodeEmitter.cpp":
         anchor = '#include "vm/BytecodeUtil.h"'
         text = replace_once(text, anchor, '#include "vm/CamoufoxMonitor.h"\n' + anchor)
@@ -163,6 +242,50 @@ def transform(path, data):
         text = replace_once(text, anchor, anchor + ATOM_HOOK)
         anchor = "    auto calleeName = calleeNode->as<NameNode>().name();\n"
         text = replace_once(text, anchor, anchor + SELF_HOSTING_GATE)
+        anchor = "  ParseNode* expr = exprStmt->kid();\n"
+        text = replace_in_function(text, "emitExpressionStatement", anchor,
+                                   anchor + SELF_HOSTING_STATEMENT_GATE)
+        for name, arguments in (("emit1", "JSOp op"),
+                                ("emitAtomOp", "JSOp op, TaggedParserAtomIndex atom"),
+                                ("emitAtomOp", "JSOp op, GCThingIndex atomIndex"),
+                                ("emitElemOpBase", "JSOp op"),
+                                ("emitArgumentsLength", "")):
+            anchor = f"bool BytecodeEmitter::{name}({arguments}) {{\n"
+            prefix = arguments + ",\n    " if arguments else "\n    "
+            text = replace_once(text, anchor,
+                                f"bool BytecodeEmitter::{name}({prefix}"
+                                "const Maybe<uint32_t>& sourceCoordOffset) {\n")
+        text = replace_once(text, "  return emitAtomOp(op, index);\n",
+                            "  return emitAtomOp(op, index, sourceCoordOffset);\n")
+        text = replace_in_function(text, "emitElemOpBase", "  if (!emit1(op)) {\n",
+                                   "  if (!emit1(op, sourceCoordOffset)) {\n")
+        text = operation_coordinates(text)
+    elif path in ("js/src/frontend/PropOpEmitter.h", "js/src/frontend/ElemOpEmitter.h"):
+        anchor = '#include "mozilla/Attributes.h"\n'
+        text = replace_once(text, anchor, anchor + '#include "mozilla/Maybe.h"\n')
+        anchor = "#include <stddef.h>\n"
+        text = replace_once(text, anchor, anchor + "#include <stdint.h>\n")
+        anchor = "  BytecodeEmitter* bce_;\n"
+        text = replace_once(text, anchor, anchor + "  mozilla::Maybe<uint32_t> camoufoxSourceCoord_;\n")
+        anchor = "  [[nodiscard]] bool prepareForObj();\n"
+        text = replace_once(text, anchor, '''  void setCamoufoxSourceCoord(mozilla::Maybe<uint32_t> offset) {
+    camoufoxSourceCoord_ = offset;
+  }
+
+''' + anchor)
+    elif path in ("js/src/frontend/PropOpEmitter.cpp", "js/src/frontend/ElemOpEmitter.cpp"):
+        if "PropOpEmitter" in path:
+            for operation in ("op", "setOp"):
+                anchor = f"bce_->emitAtomOp({operation}, propAtomIndex_)"
+                if text.count(anchor) != 2:
+                    raise ValueError("Engine property source anchor changed; port the patch first")
+                text = text.replace(anchor, f"bce_->emitAtomOp({operation}, propAtomIndex_, camoufoxSourceCoord_)")
+        else:
+            for operation in ("op", "setOp"):
+                anchor = f"bce_->emitElemOpBase({operation})"
+                if text.count(anchor) != 2:
+                    raise ValueError("Engine element source anchor changed; port the patch first")
+                text = text.replace(anchor, f"bce_->emitElemOpBase({operation}, camoufoxSourceCoord_)")
     elif path == "js/src/vm/SelfHosting.cpp":
         anchor = '#include "vm/Compression.h"'
         text = replace_once(text, anchor, '#include "vm/CamoufoxMonitor.h"\n' + anchor)
@@ -220,7 +343,7 @@ def transform(path, data):
     buildId->infallibleAppend('c');
     buildId->infallibleAppend('f');
     buildId->infallibleAppend('m');
-    buildId->infallibleAppend('1');
+    buildId->infallibleAppend('2');
   }
 
   return true;

@@ -84,6 +84,11 @@ extern JS_PUBLIC_API void SetCamoufoxMonitorContextCallback(
         text = replace_once(text, anchor, '''    bool isGlobal) {
   JS::RegisterCamoufoxHostClass(protoClass);
   JS::Rooted<JSObject*> ourProto(''')
+        anchor = '''                           const char* name, bool defineOnGlobal) {
+  JS::Rooted<JSString*> nameStr(cx, JS_AtomizeString(cx, name));'''
+        text = replace_once(text, anchor, '''                           const char* name, bool defineOnGlobal) {
+  JS::RegisterCamoufoxHostClass(namespaceClass.ToJSClass());
+  JS::Rooted<JSString*> nameStr(cx, JS_AtomizeString(cx, name));''')
     elif path == "js/src/vm/Interpreter.cpp":
         text = include_monitor(text, '#include "vm/JSContext.h"\n')
         anchor = '  bool ok = native(cx, args.length(), args.base());\n'

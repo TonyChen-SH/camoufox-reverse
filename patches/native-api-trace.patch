@@ -82,14 +82,58 @@ diff --git a/dom/bindings/moz.build b/dom/bindings/moz.build
 diff --git a/js/src/frontend/BytecodeEmitter.h b/js/src/frontend/BytecodeEmitter.h
 --- a/js/src/frontend/BytecodeEmitter.h
 +++ b/js/src/frontend/BytecodeEmitter.h
-@@ -1063,6 +1063,11 @@
+@@ -539,7 +539,8 @@
+                                BytecodeOffset* offset);
+ 
+   // Emit one bytecode.
+-  [[nodiscard]] bool emit1(JSOp op);
++  [[nodiscard]] bool emit1(JSOp op,
++      const mozilla::Maybe<uint32_t>& sourceCoordOffset = mozilla::Nothing());
+ 
+   // Emit two bytecodes, an opcode (op) with a byte of immediate operand
+   // (op1).
+@@ -618,8 +619,10 @@
+ 
+   [[nodiscard]] bool emitGCIndexOp(JSOp op, GCThingIndex index);
+ 
+-  [[nodiscard]] bool emitAtomOp(JSOp op, TaggedParserAtomIndex atom);
+-  [[nodiscard]] bool emitAtomOp(JSOp op, GCThingIndex atomIndex);
++  [[nodiscard]] bool emitAtomOp(JSOp op, TaggedParserAtomIndex atom,
++      const mozilla::Maybe<uint32_t>& sourceCoordOffset = mozilla::Nothing());
++  [[nodiscard]] bool emitAtomOp(JSOp op, GCThingIndex atomIndex,
++      const mozilla::Maybe<uint32_t>& sourceCoordOffset = mozilla::Nothing());
+ 
+   [[nodiscard]] bool emitStringOp(JSOp op, TaggedParserAtomIndex atom);
+   [[nodiscard]] bool emitStringOp(JSOp op, GCThingIndex atomIndex);
+@@ -756,7 +759,8 @@
+   // Emit an ArgumentsLength node, leaving the value of |arguments.length| on
+   // the stack. Uses the JSOp::ArgumentsLength fast path when the optimization
+   // is still eligible, otherwise falls back to reading the |arguments| binding.
+-  [[nodiscard]] bool emitArgumentsLength();
++  [[nodiscard]] bool emitArgumentsLength(
++      const mozilla::Maybe<uint32_t>& sourceCoordOffset = mozilla::Nothing());
+ 
+   [[nodiscard]] bool emitComputedPropertyName(UnaryNode* computedPropName);
+ 
+@@ -769,7 +773,8 @@
+ 
+   [[nodiscard]] bool emitElemObjAndKey(PropertyByValue* elem,
+                                        ElemOpEmitter& eoe);
+-  [[nodiscard]] bool emitElemOpBase(JSOp op);
++  [[nodiscard]] bool emitElemOpBase(JSOp op,
++      const mozilla::Maybe<uint32_t>& sourceCoordOffset = mozilla::Nothing());
+ 
+   [[nodiscard]] bool emitElemIncDec(UnaryNode* incDec, ValueUsage valueUsage);
+   [[nodiscard]] bool emitObjAndPrivateName(PrivateMemberAccess* elem,
+@@ -1063,6 +1068,12 @@
  
    [[nodiscard]] js::UniquePtr<ImmutableScriptData> createImmutableScriptData();
  
 +  [[nodiscard]] bool emitCamoufoxObserve(uint8_t operation, unsigned receiverDepth,
 +                           mozilla::Maybe<GCThingIndex> keyAtom,
 +                           unsigned keyDepth,
-+                           mozilla::Maybe<unsigned> valueDepth);
++                           mozilla::Maybe<unsigned> valueDepth,
++                           const mozilla::Maybe<uint32_t>& sourceCoordOffset = mozilla::Nothing());
 +
    [[nodiscard]] bool emitCheckIsCallable();
  
@@ -105,40 +149,43 @@ diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitt
  #include "vm/BytecodeUtil.h"  // JOF_*, IsArgOp, IsLocalOp, SET_UINT24, SET_ICINDEX, BytecodeFallsThrough, BytecodeIsJumpTarget
  #include "vm/CompletionKind.h"          // CompletionKind
  #include "vm/ConstantCompareOperand.h"  // ConstantCompareOperand
-@@ -292,6 +293,42 @@
+@@ -291,7 +292,44 @@
+ }
  #endif
  
- bool BytecodeEmitter::emit1(JSOp op) {
+-bool BytecodeEmitter::emit1(JSOp op) {
++bool BytecodeEmitter::emit1(JSOp op,
++    const Maybe<uint32_t>& sourceCoordOffset) {
 +  switch (op) {
 +    case JSOp::GetElem:
 +      if (!emitCamoufoxObserve(0, 1, mozilla::Nothing(), 0,
-+                              mozilla::Nothing())) {
++                              mozilla::Nothing(), sourceCoordOffset)) {
 +        return false;
 +      }
 +      break;
 +    case JSOp::GetElemSuper:
 +      if (!emitCamoufoxObserve(0, 0, mozilla::Nothing(), 1,
-+                              mozilla::Nothing())) {
++                              mozilla::Nothing(), sourceCoordOffset)) {
 +        return false;
 +      }
 +      break;
 +    case JSOp::SetElem:
 +    case JSOp::StrictSetElem:
 +      if (!emitCamoufoxObserve(1, 2, mozilla::Nothing(), 1,
-+                              mozilla::Some(0u))) {
++                              mozilla::Some(0u), sourceCoordOffset)) {
 +        return false;
 +      }
 +      break;
 +    case JSOp::SetElemSuper:
 +    case JSOp::StrictSetElemSuper:
 +      if (!emitCamoufoxObserve(1, 1, mozilla::Nothing(), 2,
-+                              mozilla::Some(0u))) {
++                              mozilla::Some(0u), sourceCoordOffset)) {
 +        return false;
 +      }
 +      break;
 +    case JSOp::In:
 +      if (!emitCamoufoxObserve(2, 0, mozilla::Nothing(), 1,
-+                              mozilla::Nothing())) {
++                              mozilla::Nothing(), sourceCoordOffset)) {
 +        return false;
 +      }
 +      break;
@@ -148,15 +195,34 @@ diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitt
    MOZ_ASSERT(checkStrictOrSloppy(op));
    MOZ_ASSERT(GetOpLength(op) == 1);
  
-@@ -749,6 +786,26 @@
+@@ -730,7 +768,8 @@
+   return true;
  }
  
- bool BytecodeEmitter::emitAtomOp(JSOp op, GCThingIndex atomIndex) {
+-bool BytecodeEmitter::emitAtomOp(JSOp op, TaggedParserAtomIndex atom) {
++bool BytecodeEmitter::emitAtomOp(JSOp op, TaggedParserAtomIndex atom,
++    const Maybe<uint32_t>& sourceCoordOffset) {
+   MOZ_ASSERT(atom);
+ 
+   // .generator lookups should be emitted as JSOp::GetAliasedVar instead of
+@@ -745,10 +784,31 @@
+     return false;
+   }
+ 
+-  return emitAtomOp(op, index);
+-}
+-
+-bool BytecodeEmitter::emitAtomOp(JSOp op, GCThingIndex atomIndex) {
++  return emitAtomOp(op, index, sourceCoordOffset);
++}
++
++bool BytecodeEmitter::emitAtomOp(JSOp op, GCThingIndex atomIndex,
++    const Maybe<uint32_t>& sourceCoordOffset) {
 +  switch (op) {
 +    case JSOp::GetProp:
 +    case JSOp::GetPropSuper:
 +      if (!emitCamoufoxObserve(0, 0, mozilla::Some(atomIndex), 0,
-+                              mozilla::Nothing())) {
++                              mozilla::Nothing(), sourceCoordOffset)) {
 +        return false;
 +      }
 +      break;
@@ -165,7 +231,7 @@ diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitt
 +    case JSOp::SetPropSuper:
 +    case JSOp::StrictSetPropSuper:
 +      if (!emitCamoufoxObserve(1, 1, mozilla::Some(atomIndex), 0,
-+                              mozilla::Some(0u))) {
++                              mozilla::Some(0u), sourceCoordOffset)) {
 +        return false;
 +      }
 +      break;
@@ -175,16 +241,71 @@ diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitt
    MOZ_ASSERT(JOF_OPTYPE(op) == JOF_ATOM);
  #ifdef DEBUG
    auto atom = perScriptData().gcThingList().getAtom(atomIndex);
-@@ -2583,6 +2640,42 @@
-       bytecodeSection().notes(), bytecodeSection().resumeOffsetList().span(),
-       bytecodeSection().scopeNoteList().span(),
+@@ -1676,7 +1736,8 @@
+ 
+   while (true) {
+     // Walk back up the list, emitting annotated name ops.
+-    if (!emitAtomOp(JSOp::GetProp, pndot->key().atom())) {
++    if (!emitAtomOp(JSOp::GetProp, pndot->key().atom(),
++                    Some(pndot->pn_pos.begin))) {
+       return false;
+     }
+ 
+@@ -1692,7 +1753,8 @@
+   return true;
+ }
+ 
+-bool BytecodeEmitter::emitArgumentsLength() {
++bool BytecodeEmitter::emitArgumentsLength(
++    const Maybe<uint32_t>& sourceCoordOffset) {
+   if (sc->isFunctionBox() &&
+       sc->asFunctionBox()->isEligibleForArgumentsLength() &&
+       !sc->asFunctionBox()->needsArgsObj()) {
+@@ -1701,6 +1763,7 @@
+ 
+   PropOpEmitter poe(this, PropOpEmitter::Kind::Get,
+                     PropOpEmitter::ObjKind::Other);
++  poe.setCamoufoxSourceCoord(sourceCoordOffset);
+   if (!poe.prepareForObj()) {
+     return false;
+   }
+@@ -1728,6 +1791,7 @@
+           ? PropOpEmitter::Kind::PostDecrement
+           : PropOpEmitter::Kind::PreDecrement,
+       isSuper ? PropOpEmitter::ObjKind::Super : PropOpEmitter::ObjKind::Other);
++  poe.setCamoufoxSourceCoord(Some(prop->pn_pos.begin));
+   if (!poe.prepareForObj()) {
+     return false;
+   }
+@@ -1776,6 +1840,7 @@
+   ParseNode* exprOrSuper = &elem->expression();
+   ParseNode* key = &elem->key();
+ 
++  eoe.setCamoufoxSourceCoord(Some(elem->pn_pos.begin));
+   if (!eoe.prepareForObj()) {
+     //              [stack]
+     return false;
+@@ -1813,8 +1878,9 @@
+   return true;
+ }
+ 
+-bool BytecodeEmitter::emitElemOpBase(JSOp op) {
+-  if (!emit1(op)) {
++bool BytecodeEmitter::emitElemOpBase(JSOp op,
++    const Maybe<uint32_t>& sourceCoordOffset) {
++  if (!emit1(op, sourceCoordOffset)) {
+     return false;
+   }
+ 
+@@ -2585,6 +2651,43 @@
        bytecodeSection().tryNoteList().span());
-+}
-+
+ }
+ 
 +bool BytecodeEmitter::emitCamoufoxObserve(
 +    uint8_t operation, unsigned receiverDepth,
 +    mozilla::Maybe<GCThingIndex> keyAtom, unsigned keyDepth,
-+    mozilla::Maybe<unsigned> valueDepth) {
++    mozilla::Maybe<unsigned> valueDepth,
++    const mozilla::Maybe<uint32_t>& sourceCoordOffset) {
 +  if (emitterMode == SelfHosting || !js::CamoufoxMonitorEnabled()) {
 +    return true;
 +  }
@@ -214,11 +335,86 @@ diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitt
 +  } else if (!emit1(JSOp::Undefined)) {
 +    return false;
 +  }
-+  return emitCall(JSOp::Call, 4) && emit1(JSOp::Pop);
- }
- 
++  return emitCall(JSOp::Call, 4, sourceCoordOffset) && emit1(JSOp::Pop);
++}
++
  bool BytecodeEmitter::emitCheckIsCallable() {
-@@ -8672,6 +8765,17 @@
+   // This emits code to check if the value at the top of the stack is
+   // callable. The value is left on the stack.
+@@ -2732,6 +2835,7 @@
+       PropOpEmitter poe(this, PropOpEmitter::Kind::SimpleAssignment,
+                         isSuper ? PropOpEmitter::ObjKind::Super
+                                 : PropOpEmitter::ObjKind::Other);
++      poe.setCamoufoxSourceCoord(Some(prop->pn_pos.begin));
+       if (!poe.prepareForObj()) {
+         return false;
+       }
+@@ -4506,6 +4610,7 @@
+                              : PropOpEmitter::Kind::SimpleAssignment,
+                   isSuper ? PropOpEmitter::ObjKind::Super
+                           : PropOpEmitter::ObjKind::Other);
++      poe->setCamoufoxSourceCoord(Some(prop->pn_pos.begin));
+       if (!poe->prepareForObj()) {
+         return false;
+       }
+@@ -4815,6 +4920,7 @@
+                   isSuper ? PropOpEmitter::ObjKind::Super
+                           : PropOpEmitter::ObjKind::Other);
+ 
++      poe->setCamoufoxSourceCoord(Some(prop->pn_pos.begin));
+       if (!poe->prepareForObj()) {
+         return false;
+       }
+@@ -7381,6 +7487,22 @@
+ 
+   /* Don't eliminate expressions with side effects. */
+   ParseNode* expr = exprStmt->kid();
++  if (!wantval && emitterMode == SelfHosting &&
++      !js::CamoufoxMonitorEnabled() && expr->isKind(ParseNodeKind::CallExpr)) {
++    CallNode* call = &expr->as<CallNode>();
++    ParseNode* callee = call->callee();
++    if (call->callOp() == JSOp::Call && callee->isKind(ParseNodeKind::Name)) {
++      constexpr char intrinsic[] = "CamoufoxObserve";
++      auto observer = parserAtoms().internAscii(fc, intrinsic,
++                                                sizeof(intrinsic) - 1);
++      if (!observer) {
++        return false;
++      }
++      if (callee->as<NameNode>().name() == observer) {
++        return true;
++      }
++    }
++  }
+   if (!useful) {
+     if (!checkSideEffects(expr, &useful)) {
+       return false;
+@@ -8183,7 +8305,7 @@
+       if (!cone.prepareForOtherCallee()) {
+         return false;
+       }
+-      if (!emitArgumentsLength()) {
++      if (!emitArgumentsLength(Some(callee->pn_pos.begin))) {
+         //          [stack] ARGUMENTS_LENGTH
+         return false;
+       }
+@@ -8292,7 +8414,7 @@
+       if (!cone.prepareForOtherCallee()) {
+         return false;
+       }
+-      if (!emitArgumentsLength()) {
++      if (!emitArgumentsLength(Some(callee->pn_pos.begin))) {
+         //          [stack] ARGUMENTS_LENGTH
+         return false;
+       }
+@@ -8304,6 +8426,7 @@
+       bool isSuper = prop->isSuper();
+ 
+       PropOpEmitter& poe = cone.prepareForPropCallee(isSuper);
++      poe.setCamoufoxSourceCoord(Some(prop->pn_pos.begin));
+       if (!poe.prepareForObj()) {
+         return false;
+       }
+@@ -8672,6 +8795,17 @@
      // NOTE: The list of special instruction names has to be kept in sync with
      // "js/src/builtin/.eslintrc.js".
      auto calleeName = calleeNode->as<NameNode>().name();
@@ -230,12 +426,207 @@ diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitt
 +        return false;
 +      }
 +      if (calleeName == observer) {
-+        return valueUsage == ValueUsage::IgnoreValue || emit1(JSOp::Undefined);
++        return emit1(JSOp::Undefined);
 +      }
 +    }
      if (calleeName == TaggedParserAtomIndex::WellKnown::callFunction()) {
        return emitSelfHostedCallFunction(callNode, JSOp::Call);
      }
+@@ -8998,7 +9132,7 @@
+     if (!emitTree(nextExpr)) {
+       return false;
+     }
+-    if (!emit1(op)) {
++    if (!emit1(op, op == JSOp::In ? Some(node->pn_pos.begin) : Nothing())) {
+       return false;
+     }
+   } while ((nextExpr = nextExpr->pn_next));
+@@ -9076,7 +9210,7 @@
+       // Emit via emitArgumentsLength to handle elided arguments bindings;
+       // emitOptionalDotExpression would instead emit a plain GetName of
+       // |arguments|.
+-      if (!emitArgumentsLength()) {
++      if (!emitArgumentsLength(Some(pn->pn_pos.begin))) {
+         return false;
+       }
+       break;
+@@ -9231,6 +9365,7 @@
+                                                 PropOpEmitter& poe,
+                                                 bool isSuper,
+                                                 OptionalEmitter& oe) {
++  poe.setCamoufoxSourceCoord(Some(prop->pn_pos.begin));
+   if (!poe.prepareForObj()) {
+     //              [stack]
+     return false;
+@@ -9272,6 +9407,7 @@
+                                                  ElemOpEmitter& eoe,
+                                                  bool isSuper,
+                                                  OptionalEmitter& oe) {
++  eoe.setCamoufoxSourceCoord(Some(elem->pn_pos.begin));
+   if (!eoe.prepareForObj()) {
+     //              [stack]
+     return false;
+@@ -12952,6 +13088,7 @@
+       PropOpEmitter poe(this, PropOpEmitter::Kind::Get,
+                         isSuper ? PropOpEmitter::ObjKind::Super
+                                 : PropOpEmitter::ObjKind::Other);
++      poe.setCamoufoxSourceCoord(Some(prop->pn_pos.begin));
+       if (!poe.prepareForObj()) {
+         return false;
+       }
+@@ -12975,7 +13112,7 @@
+     }
+ 
+     case ParseNodeKind::ArgumentsLength: {
+-      if (!emitArgumentsLength()) {
++      if (!emitArgumentsLength(Some(pn->pn_pos.begin))) {
+         return false;
+       }
+       break;
+diff --git a/js/src/frontend/PropOpEmitter.h b/js/src/frontend/PropOpEmitter.h
+--- a/js/src/frontend/PropOpEmitter.h
++++ b/js/src/frontend/PropOpEmitter.h
+@@ -6,8 +6,10 @@
+ #define frontend_PropOpEmitter_h
+ 
+ #include "mozilla/Attributes.h"
++#include "mozilla/Maybe.h"
+ 
+ #include <stddef.h>
++#include <stdint.h>
+ 
+ #include "vm/SharedStencil.h"  // GCThingIndex
+ 
+@@ -118,6 +120,7 @@
+ 
+  private:
+   BytecodeEmitter* bce_;
++  mozilla::Maybe<uint32_t> camoufoxSourceCoord_;
+ 
+   Kind kind_;
+   ObjKind objKind_;
+@@ -230,6 +233,10 @@
+   [[nodiscard]] bool prepareAtomIndex(TaggedParserAtomIndex prop);
+ 
+  public:
++  void setCamoufoxSourceCoord(mozilla::Maybe<uint32_t> offset) {
++    camoufoxSourceCoord_ = offset;
++  }
++
+   [[nodiscard]] bool prepareForObj();
+ 
+   [[nodiscard]] bool emitGet(TaggedParserAtomIndex prop);
+diff --git a/js/src/frontend/PropOpEmitter.cpp b/js/src/frontend/PropOpEmitter.cpp
+--- a/js/src/frontend/PropOpEmitter.cpp
++++ b/js/src/frontend/PropOpEmitter.cpp
+@@ -65,7 +65,7 @@
+   }
+ 
+   JSOp op = isSuper() ? JSOp::GetPropSuper : JSOp::GetProp;
+-  if (!bce_->emitAtomOp(op, propAtomIndex_)) {
++  if (!bce_->emitAtomOp(op, propAtomIndex_, camoufoxSourceCoord_)) {
+     //              [stack] # if Get
+     //              [stack] PROP
+     //              [stack] # if Call
+@@ -137,7 +137,7 @@
+     }
+   } else {
+     JSOp op = bce_->sc->strict() ? JSOp::StrictDelProp : JSOp::DelProp;
+-    if (!bce_->emitAtomOp(op, propAtomIndex_)) {
++    if (!bce_->emitAtomOp(op, propAtomIndex_, camoufoxSourceCoord_)) {
+       //            [stack] SUCCEEDED
+       return false;
+     }
+@@ -165,7 +165,7 @@
+                                                  : JSOp::SetPropSuper
+                : bce_->sc->strict() ? JSOp::StrictSetProp
+                                     : JSOp::SetProp;
+-  if (!bce_->emitAtomOp(setOp, propAtomIndex_)) {
++  if (!bce_->emitAtomOp(setOp, propAtomIndex_, camoufoxSourceCoord_)) {
+     //              [stack] VAL
+     return false;
+   }
+@@ -213,7 +213,7 @@
+                                               : JSOp::SetPropSuper
+                : bce_->sc->strict() ? JSOp::StrictSetProp
+                                     : JSOp::SetProp;
+-  if (!bce_->emitAtomOp(setOp, propAtomIndex_)) {
++  if (!bce_->emitAtomOp(setOp, propAtomIndex_, camoufoxSourceCoord_)) {
+     //              [stack] N? N+1
+     return false;
+   }
+diff --git a/js/src/frontend/ElemOpEmitter.h b/js/src/frontend/ElemOpEmitter.h
+--- a/js/src/frontend/ElemOpEmitter.h
++++ b/js/src/frontend/ElemOpEmitter.h
+@@ -6,8 +6,10 @@
+ #define frontend_ElemOpEmitter_h
+ 
+ #include "mozilla/Attributes.h"
++#include "mozilla/Maybe.h"
+ 
+ #include <stddef.h>
++#include <stdint.h>
+ 
+ namespace js {
+ namespace frontend {
+@@ -135,6 +137,7 @@
+ 
+  private:
+   BytecodeEmitter* bce_;
++  mozilla::Maybe<uint32_t> camoufoxSourceCoord_;
+ 
+   Kind kind_;
+   ObjKind objKind_;
+@@ -244,6 +247,10 @@
+   [[nodiscard]] bool isSuper() const { return objKind_ == ObjKind::Super; }
+ 
+  public:
++  void setCamoufoxSourceCoord(mozilla::Maybe<uint32_t> offset) {
++    camoufoxSourceCoord_ = offset;
++  }
++
+   [[nodiscard]] bool prepareForObj();
+   [[nodiscard]] bool prepareForKey();
+ 
+diff --git a/js/src/frontend/ElemOpEmitter.cpp b/js/src/frontend/ElemOpEmitter.cpp
+--- a/js/src/frontend/ElemOpEmitter.cpp
++++ b/js/src/frontend/ElemOpEmitter.cpp
+@@ -91,7 +91,7 @@
+   } else {
+     op = JSOp::GetElem;
+   }
+-  if (!bce_->emitElemOpBase(op)) {
++  if (!bce_->emitElemOpBase(op, camoufoxSourceCoord_)) {
+     //              [stack] # if Get
+     //              [stack] ELEM
+     //              [stack] # if Call
+@@ -160,7 +160,7 @@
+     }
+   } else {
+     JSOp op = bce_->sc->strict() ? JSOp::StrictDelElem : JSOp::DelElem;
+-    if (!bce_->emitElemOpBase(op)) {
++    if (!bce_->emitElemOpBase(op, camoufoxSourceCoord_)) {
+       // SUCCEEDED
+       return false;
+     }
+@@ -183,7 +183,7 @@
+                                                  : JSOp::SetElemSuper
+                : bce_->sc->strict() ? JSOp::StrictSetElem
+                                     : JSOp::SetElem;
+-  if (!bce_->emitElemOpBase(setOp)) {
++  if (!bce_->emitElemOpBase(setOp, camoufoxSourceCoord_)) {
+     //              [stack] ELEM
+     return false;
+   }
+@@ -230,7 +230,7 @@
+       isSuper()
+           ? (bce_->sc->strict() ? JSOp::StrictSetElemSuper : JSOp::SetElemSuper)
+           : (bce_->sc->strict() ? JSOp::StrictSetElem : JSOp::SetElem);
+-  if (!bce_->emitElemOpBase(setOp)) {
++  if (!bce_->emitElemOpBase(setOp, camoufoxSourceCoord_)) {
+     //              [stack] N? N+1
+     return false;
+   }
 diff --git a/js/src/vm/SelfHosting.cpp b/js/src/vm/SelfHosting.cpp
 --- a/js/src/vm/SelfHosting.cpp
 +++ b/js/src/vm/SelfHosting.cpp
@@ -373,7 +764,7 @@ diff --git a/js/src/frontend/StencilXdr.cpp b/js/src/frontend/StencilXdr.cpp
 +    buildId->infallibleAppend('c');
 +    buildId->infallibleAppend('f');
 +    buildId->infallibleAppend('m');
-+    buildId->infallibleAppend('1');
++    buildId->infallibleAppend('2');
    }
  
    return true;
@@ -471,6 +862,14 @@ diff --git a/dom/bindings/BindingUtils.cpp b/dom/bindings/BindingUtils.cpp
    JS::Rooted<JSObject*> ourProto(
        cx, JS_NewObjectWithGivenProto(cx, protoClass, parentProto));
    if (!ourProto ||
+@@ -1217,6 +1229,7 @@
+                            const NativeProperties* properties,
+                            const NativeProperties* chromeOnlyProperties,
+                            const char* name, bool defineOnGlobal) {
++  JS::RegisterCamoufoxHostClass(namespaceClass.ToJSClass());
+   JS::Rooted<JSString*> nameStr(cx, JS_AtomizeString(cx, name));
+   if (!nameStr) {
+     return;
 diff --git a/js/src/vm/Interpreter.cpp b/js/src/vm/Interpreter.cpp
 --- a/js/src/vm/Interpreter.cpp
 +++ b/js/src/vm/Interpreter.cpp
