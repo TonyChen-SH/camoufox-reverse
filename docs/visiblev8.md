@@ -18,7 +18,7 @@ python -m camoufox_trace_mcp export-vv8 traces/engine.jsonl --output traces/vv8-
 
 默认排除**当前执行 realm** 为 system 的操作；这不是对所有调用者权限的过滤。`CAMOUFOX_ENGINE_PRIVILEGED=1` 可包括当前 system realm。原生调用没有脚本帧时使用标准 `!?`，不伪造脚本来源。
 
-`CAMOUFOX_ENGINE_MAX_RECORDS` 是每进程逻辑记录上限，包含脚本及上下文记录；默认 `0` 表示无限制。非法配置、达到上限、源码/序列化失败会输出 `channel:"engine"` 的 `limit`，采集须标记不完整。消费者和采集器还有独立、显式的资源上限。
+`CAMOUFOX_ENGINE_MAX_RECORDS` 是每进程逻辑记录上限，包含脚本及上下文记录；默认 `0` 表示无限制。非法配置、达到上限、源码读取错误/OOM 或序列化失败会输出 `channel:"engine"` 的 `limit`，采集须标记不完整。消费者和采集器还有独立、显式的资源上限。
 
 ## 捕获位置
 
@@ -39,6 +39,12 @@ python -m camoufox_trace_mcp export-vv8 traces/engine.jsonl --output traces/vv8-
 ## 原始记录与传输
 
 标准记录包括 `~` runtime/isolate、`@` 文档或 Worker href/安全令牌、`$` 完整源码与原生 eval 父来源、`!` 活跃脚本，以及 `g/s/c/n`。脚本按首次观察惰性注册，父来源先于子脚本；不保证枚举未执行监控操作的脚本。线程标识是进程内唯一的线程流 ID，不是 frame/request ID。
+
+源码通过原生 `ScriptSource::tryLoadSource` 读取，遵守当前调用者的 source hook 权限。Firefox 允许 discarded/Missing 源码，以及暂时无法回取的 lazy source。当前源码不可用时保留 API 尝试，用标准 `!?` 和 offset `-1`；有完整子源码而介绍祖先不可用或成环时，保留子源码并用 `#?` 表示未知父来源。不会发布伪空 `$` 记录，retrievable 来源在后续观察时可重试。
+
+这些情况另发 `schema:1,event:"source_unavailable",channel:"engine"` 控制记录，携带 `pid,tid,source_id,reason,scope,filename,introduction_type,retrievable,introduction_source_id`。`scope` 区分当前源码和介绍关系，常见原因是 `source_missing`、`source_not_loaded`、`introduction_cycle`；有界诊断字段显式保留 truncation flags。消费者保留该元数据并报告 `source_provenance_complete=false`，不把它归为传输丢失。真正的 source hook 失败、OOM、substring/linear 错误仍发停止捕获的 `limit`，并附 source ID、文件名、介绍类型与具体 `stage`，完整导出须拒绝这些丢失场景。
+
+该区分来自固定版本 [tryLoadSource](https://github.com/mozilla-firefox/firefox/blob/9378fbc58660847fbc02c3486a0ecd6049978e25/js/src/vm/JSScript.cpp#L835) 的布尔结果与 `loaded` 输出参数；[XPCJSSourceHook](https://github.com/mozilla-firefox/firefox/blob/9378fbc58660847fbc02c3486a0ecd6049978e25/js/xpconnect/src/XPCJSRuntime.cpp) 可在当前权限不允许时成功返回但不提供源码。
 
 `@` 的 href 来自原生文档 URI 或 Worker ClientInfo，第二字段使用 Firefox principal 的 `GetOriginNoSuffix` 文本；它不是 V8 security token 对象的逐值复制。对象身份、runtime 指针及脚本 ID 都属于各自引擎的运行实例，不能跨浏览器按数值匹配。
 

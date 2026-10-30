@@ -260,6 +260,15 @@ async def check_mcp(destination, capture, unicode_script):
     async with stdio_client(parameters) as (read, write):
         async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=30)) as session:
             await session.initialize()
+            availability = capture.engine.source_availability()
+
+            def check_availability(page):
+                require(page["source_provenance_complete"] == availability["source_provenance_complete"],
+                        "MCP changed source provenance completeness")
+                require(page["source_provenance_scope"] == "observed_engine_sources",
+                        "MCP source provenance scope differs")
+                require(page["source_unavailable_count"] == len(capture.engine.source_unavailable),
+                        "MCP unavailable-source count differs")
 
             async def invoke(name, arguments):
                 result = await session.call_tool(name, arguments)
@@ -271,11 +280,13 @@ async def check_mcp(destination, capture, unicode_script):
             require("on.jsonl" in listing["traces"], "MCP did not list the actual engine capture")
             summary = await invoke("summarize_trace", {"path": "on.jsonl", "channel": "engine"})
             require(summary["event_count"] == len(capture.events), "MCP engine event count differs")
+            check_availability(summary["engine"])
             filtered = await invoke("get_trace_events", {
                 "path": "on.jsonl", "channel": "engine", "op": "get",
                 "property_name": "__vv8_hot_read", "limit": 5})
             require(filtered["matched"] == 1000 and len(filtered["events"]) == 5,
                     "MCP filtered hot-loop count differs")
+            check_availability(filtered)
             require(all(event["result"] == {"type": "unavailable", "reason": "not_observed"}
                         and event["threw"] is None for event in filtered["events"]),
                     "MCP invented a legacy return or exception result")
@@ -284,11 +295,24 @@ async def check_mcp(destination, capture, unicode_script):
             require(comparison["call_site_changes"], "MCP did not observe OFF/ON activity changes")
             scripts = await invoke("get_trace_scripts", {"path": "on.jsonl", "limit": 100})
             require(scripts["matched"] == len(capture.engine.scripts), "MCP script registry count differs")
+            unavailable = []
+            availability_page = scripts
+            while True:
+                check_availability(availability_page)
+                unavailable.extend(availability_page["source_unavailable"])
+                next_offset = availability_page["source_unavailable_next_offset"]
+                if next_offset is None:
+                    break
+                availability_page = await invoke("get_trace_scripts", {
+                    "path": "on.jsonl", "offset": next_offset, "limit": 100})
+            require(unavailable == capture.engine.source_unavailable,
+                    "MCP unavailable-source pages did not preserve complete controls")
             source, offset = "", 0
             while True:
                 page = await invoke("get_trace_script_source", {
                     "path": "on.jsonl", "index": unicode_script["index"], "offset": offset, "limit": 2048})
                 require(page["source_page_unit"] == "unicode_code_points", "MCP source page unit differs")
+                check_availability(page)
                 source += page["source"]
                 if page["next_offset"] is None:
                     break
@@ -297,6 +321,7 @@ async def check_mcp(destination, capture, unicode_script):
             raw = await invoke("get_trace_raw_records", {
                 "path": "on.jsonl", "pid": unicode_script["pid"], "tid": unicode_script["tid"], "limit": 3})
             require(raw["records"], "MCP did not return original reassembled VV8 records")
+            check_availability(raw)
     return {"tools": 7, "hot_read_count": filtered["matched"], "source_characters": len(source)}
 
 
@@ -504,7 +529,19 @@ def validate(binary, destination):
                 require(summarize(restored)["integrity"] == "no_known_loss", "Export/import introduced known loss")
                 require([record["raw"] for record in restored.engine.streams[(file["pid"], file["tid"])].records]
                         == [record["raw"] for record in stream.records], "VV8 import did not restore exact raw records")
-            return {"streams": len(manifest["files"]), "records": sum(file["records"] for file in manifest["files"])}
+            restored_all_path = destination / "roundtrip-manifest.jsonl"
+            import_vv8([exported / file["name"] for file in manifest["files"]], restored_all_path,
+                       manifest=exported / "manifest.json")
+            restored_all = read_capture(restored_all_path)
+            require(summarize(restored_all)["integrity"] == "no_known_loss",
+                    "Manifest round trip introduced known loss")
+            require(restored_all.engine.source_unavailable == capture.engine.source_unavailable,
+                    "Manifest round trip lost unavailable-source metadata")
+            require(restored_all.engine.source_availability()["source_provenance_complete"]
+                    == capture.engine.source_availability()["source_provenance_complete"],
+                    "Manifest round trip changed source provenance completeness")
+            return {"streams": len(manifest["files"]), "records": sum(file["records"] for file in manifest["files"]),
+                    "source_unavailable": len(capture.engine.source_unavailable)}
         check("raw_export_roundtrip", export_roundtrip)
         check("mcp_sdk", lambda: asyncio.run(check_mcp(destination, capture, unicode_scripts[0])))
         require(all(item["status"] == "passed" for item in report["checks"].values()),

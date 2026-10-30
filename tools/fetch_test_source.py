@@ -11,6 +11,10 @@ from generate_patch import PATHS, ROOT, git_blob
 
 # Unmodified model inputs at Firefox 9378fbc58660847fbc02c3486a0ecd6049978e25.
 TEST_SOURCE = {
+    "js/src/vm/JSScript.cpp": "18245bec13580f1857391a0527a33800bcf12530",
+    "js/src/vm/JSScript.h": "239b31ee4ce1bbcf820d74ee3a2d9c7e037adfd6",
+    "js/src/vm/CompilationAndEvaluation.cpp": "4de5159014acdedb25ff697a61710b6122ed591f",
+    "js/xpconnect/src/XPCJSRuntime.cpp": "785c22271ba420271d2c4d6c2402ea8ed8c5bcb4",
     "js/src/frontend/ExpressionStatementEmitter.cpp": "5e4b56bf4eafe04b643857b4a3fcfc5693408129",
     "js/src/frontend/ExpressionStatementEmitter.h": "3c752341190a1e7bcd2db54e2413399db466eaad",
     "js/src/frontend/CForEmitter.cpp": "81ad612792e532fe24fceb82c8dc8d94c842e220",

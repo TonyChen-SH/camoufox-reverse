@@ -103,14 +103,41 @@ uint64_t ProcessId() {
 #endif
 }
 
-void Limit(const char* reason) {
+void AppendSourceDetails(mozilla::camoutrace::JsonBuffer<2048>& record,
+                         js::ScriptSource* source, bool retrievable) {
+  record.Raw(",\"source_id\":"); record.UInt(source->id());
+  record.Raw(",\"filename\":");
+  bool filenameTruncated = false;
+  if (source->filename()) filenameTruncated = record.String(source->filename(), 512);
+  else record.Raw("null");
+  record.Raw(",\"introduction_type\":");
+  bool introductionTruncated = false;
+  if (source->hasIntroductionType()) {
+    introductionTruncated = record.String(source->introductionType(), 128);
+  } else {
+    record.Raw("null");
+  }
+  record.Raw(retrievable ? ",\"retrievable\":true" : ",\"retrievable\":false");
+  record.Raw(filenameTruncated ? ",\"filename_truncated\":true" : ",\"filename_truncated\":false");
+  record.Raw(introductionTruncated ? ",\"introduction_type_truncated\":true" : ",\"introduction_type_truncated\":false");
+  record.Raw(record.Truncated() ? ",\"truncated\":true" : ",\"truncated\":false");
+}
+
+void Limit(const char* reason, js::ScriptSource* source = nullptr,
+           const char* stage = nullptr, bool retrievable = false,
+           uint64_t tid = 0) {
   if (gStopped.exchange(true)) return;
-  mozilla::camoutrace::JsonBuffer<512> record;
+  mozilla::camoutrace::JsonBuffer<2048> record;
   record.Raw("CAMOUFOX_TRACE {\"schema\":1,\"event\":\"limit\",\"pid\":");
   record.UInt(ProcessId());
   record.Raw(",\"channel\":\"engine\",\"emitted\":");
   record.UInt(gEmitted.load());
   record.Raw(",\"reason\":"); record.String(reason);
+  if (source) {
+    record.Raw(",\"tid\":"); record.UInt(tid);
+    AppendSourceDetails(record, source, retrievable);
+  }
+  if (stage) { record.Raw(",\"stage\":"); record.String(stage); }
   record.Raw("}\n");
   std::lock_guard<std::mutex> lock(gOutputMutex);
   auto text = record.View();
@@ -123,6 +150,9 @@ struct SourceInfo {
   uint32_t firstColumn;
   uint64_t length;
   std::vector<uint64_t> lineStarts;
+  bool available = false;
+  bool retrievable = false;
+  bool introductionCycle = false;
 };
 
 struct ThreadState {
@@ -362,15 +392,70 @@ SourceKey Key(JSRuntime* runtime, uint32_t source) {
   return {reinterpret_cast<uintptr_t>(runtime), source};
 }
 
+bool SourceFailure(JSContext* cx, js::ScriptSource* source,
+                    const char* reason, const char* stage) {
+  js::ScriptSource::DataReader state(source);
+  Limit(cx->isThrowingOutOfMemory() ? "engine_source_oom" : reason,
+        source, stage, state.isRetrievable(), gThread.tid);
+  return false;
+}
+
+bool SourceUnavailable(JS::HandleObject sourceObject,
+                        const char* reason, const char* scope,
+                        bool retrievable) {
+  if (gStopped.load()) return false;
+  auto& object = sourceObject->as<js::ScriptSourceObject>();
+  auto* source = object.source();
+  mozilla::camoutrace::JsonBuffer<2048> record;
+  record.Raw("CAMOUFOX_TRACE {\"schema\":1,\"event\":\"source_unavailable\",\"channel\":\"engine\",\"pid\":");
+  record.UInt(ProcessId());
+  record.Raw(",\"tid\":"); record.UInt(gThread.tid);
+  record.Raw(",\"reason\":"); record.String(reason);
+  record.Raw(",\"scope\":"); record.String(scope);
+  AppendSourceDetails(record, source, retrievable);
+  record.Raw(",\"introduction_source_id\":");
+  if (auto* parent = object.unwrappedIntroductionScript()) {
+    record.UInt(parent->scriptSource()->id());
+  } else {
+    record.Raw("null");
+  }
+  record.Raw("}\n");
+  bool written;
+  {
+    std::lock_guard<std::mutex> lock(gOutputMutex);
+    auto text = record.View();
+    written = !record.Failed() &&
+              std::fwrite(text.data(), 1, text.size(), stderr) == text.size();
+  }
+  if (!written) Limit("engine_transport");
+  return written;
+}
+
 bool RegisterSource(JSContext* cx, JS::HandleObject current) {
   JS::RootedObjectVector pending(cx);
   JS::RootedObject sourceObject(cx, current);
   std::unordered_set<uint32_t> pendingIds;
+  std::unordered_set<uint32_t> unknownParents;
   while (sourceObject) {
     auto* source = sourceObject->as<js::ScriptSourceObject>().source();
-    if (gThread.sources.count(Key(cx->runtime(), source->id()))) break;
-    if (!pendingIds.insert(source->id()).second) return false;
-    if (!pending.append(sourceObject)) return false;
+    auto known = gThread.sources.find(Key(cx->runtime(), source->id()));
+    if (known != gThread.sources.end() &&
+        (known->second.available || !known->second.retrievable)) break;
+    if (!pendingIds.insert(source->id()).second) {
+      JS::RootedObject child(cx, pending[pending.length() - 1]);
+      auto* childSource = child->as<js::ScriptSourceObject>().source();
+      unknownParents.insert(childSource->id());
+      auto previous = gThread.sources.find(Key(cx->runtime(), childSource->id()));
+      if (previous == gThread.sources.end() || !previous->second.introductionCycle) {
+        js::ScriptSource::DataReader state(childSource);
+        if (!SourceUnavailable(child, "introduction_cycle", "introduction",
+                               state.isRetrievable())) return false;
+      }
+      break;
+    }
+    if (!pending.append(sourceObject)) {
+      return SourceFailure(cx, source, "engine_source_pending_error", "pending_append");
+    }
     js::BaseScript* parent = sourceObject->as<js::ScriptSourceObject>()
                                   .unwrappedIntroductionScript();
     sourceObject = parent ? parent->sourceObject() : nullptr;
@@ -379,17 +464,38 @@ bool RegisterSource(JSContext* cx, JS::HandleObject current) {
     sourceObject = pending[i - 1];
     auto* source = sourceObject->as<js::ScriptSourceObject>().source();
     uint32_t sourceId = source->id();
+    auto key = Key(cx->runtime(), sourceId);
+    auto previous = gThread.sources.find(key);
+    bool cycle = unknownParents.count(sourceId) ||
+                 (previous != gThread.sources.end() && previous->second.introductionCycle);
     JS::RootedString text(cx);
     {
-      js::ScriptSource::DataReader reader(source);
-      if (!reader.hasSourceText()) return false;
-      text = reader->substring(cx, 0, reader->length());
+      mozilla::Maybe<js::ScriptSource::DataReader> reader;
+      bool loaded = false;
+      if (!source->tryLoadSource(cx, reader, &loaded)) {
+        return SourceFailure(cx, source, "engine_source_load_error", "try_load_source");
+      }
+      if (reader.isNothing() || loaded != reader->hasSourceText()) {
+        return SourceFailure(cx, source, "engine_source_state_error", "loaded_state");
+      }
+      if (!loaded) {
+        bool retrievable = reader->isRetrievable();
+        if (previous == gThread.sources.end() &&
+            !SourceUnavailable(sourceObject,
+                               retrievable ? "source_not_loaded" : "source_missing",
+                               "source", retrievable)) return false;
+        SourceInfo unavailable{source->startLine(), source->startColumn().oneOriginValue(),
+                               0, {}, false, retrievable, cycle};
+        gThread.sources.insert_or_assign(key, std::move(unavailable));
+        continue;
+      }
+      text = (*reader)->substring(cx, 0, (*reader)->length());
     }
-    if (!text) return false;
+    if (!text) return SourceFailure(cx, source, "engine_source_substring_error", "substring");
     SourceInfo info{source->startLine(), source->startColumn().oneOriginValue(),
-                    text->length(), {0}};
+                    text->length(), {0}, true, false, cycle};
     JSLinearString* linear = text->ensureLinear(cx);
-    if (!linear) return false;
+    if (!linear) return SourceFailure(cx, source, "engine_source_linear_error", "ensure_linear");
     {
       JS::AutoCheckCannotGC nogc;
       auto unit = [&](size_t index) -> char16_t {
@@ -408,21 +514,28 @@ bool RegisterSource(JSContext* cx, JS::HandleObject current) {
     registration.Raw("$"); registration.Unsigned(sourceId); registration.Raw(":");
     js::BaseScript* parent = sourceObject->as<js::ScriptSourceObject>()
                                   .unwrappedIntroductionScript();
-    if (parent) {
+    auto parentInfo = parent ? gThread.sources.find(Key(cx->runtime(), parent->scriptSource()->id()))
+                             : gThread.sources.end();
+    if (parent && !cycle && parentInfo != gThread.sources.end() && parentInfo->second.available) {
       registration.Unsigned(parent->scriptSource()->id());
-    } else if (source->hasIntroductionType() &&
+    } else if (parent || (source->hasIntroductionType() &&
                (std::string_view(source->introductionType()).find("eval") != std::string_view::npos ||
-                std::string_view(source->introductionType()).find("Function") != std::string_view::npos)) {
+                std::string_view(source->introductionType()).find("Function") != std::string_view::npos))) {
       registration.Raw("#?");
     } else if (source->filename()) {
       JS::RootedString filename(cx, JS_NewStringCopyUTF8Z(cx, JS::ConstUTF8CharsZ(source->filename())));
-      if (!filename || !AppendString(cx, filename, registration)) return false;
+      if (!filename || !AppendString(cx, filename, registration)) {
+        return SourceFailure(cx, source, "engine_source_filename_error", "filename");
+      }
     } else {
       registration.Raw("#U");
     }
     registration.Raw(":");
-    if (!AppendString(cx, text, registration, false) || !Emit(registration.View())) return false;
-    gThread.sources.emplace(Key(cx->runtime(), sourceId), std::move(info));
+    if (!AppendString(cx, text, registration, false)) {
+      return SourceFailure(cx, source, "engine_source_text_error", "source_record");
+    }
+    if (!Emit(registration.View())) return false;
+    gThread.sources.insert_or_assign(key, std::move(info));
   }
   return true;
 }
@@ -447,7 +560,10 @@ bool Context(JSContext* cx, int64_t* offset) {
     origin.Raw(":");
     if (!AppendString(cx, token, origin)) return false;
   } else {
-    cx->clearPendingException();
+    if (cx->isExceptionPending()) {
+      Limit(cx->isThrowingOutOfMemory() ? "engine_context_oom" : "engine_context_error");
+      return false;
+    }
     origin.Raw("@?");
   }
   if (origin.View() != gThread.origin) {
@@ -465,9 +581,15 @@ bool Context(JSContext* cx, int64_t* offset) {
   unsigned line = js::PCToLineNumber(script, pc, &column);
   JS::RootedObject sourceObject(cx, script->sourceObject());
   uint32_t sourceId = script->scriptSource()->id();
-  if (!gThread.sources.count(Key(cx->runtime(), sourceId)) &&
+  auto known = gThread.sources.find(Key(cx->runtime(), sourceId));
+  if ((known == gThread.sources.end() ||
+       (!known->second.available && known->second.retrievable)) &&
       !RegisterSource(cx, sourceObject)) return false;
   const SourceInfo& info = gThread.sources.at(Key(cx->runtime(), sourceId));
+  if (!info.available) {
+    gThread.script = -1;
+    return Emit("!?");
+  }
   if (line >= info.firstLine) {
     uint64_t lineIndex = line - info.firstLine;
     uint64_t firstColumn = lineIndex ? 1 : info.firstColumn;

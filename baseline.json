@@ -109,7 +109,7 @@
     "dom/bindings/CamoufoxTrace.cpp": "4c33ced9cc1170e09f0f01151e2b9c207cb7d7e30e142844e0bbd1d0a70d92a2",
     "dom/bindings/CamoufoxTrace.h": "a932148b22b80ad39d52a044644e41acec12e269965eb9951acc20cec6325244",
     "js/public/experimental/CamoufoxTraceBuffer.h": "926b25c11fa4c8708f85442bc5a10ed4de8b2752e128e5e58e944cd22bd7ade9",
-    "js/src/vm/CamoufoxMonitor.cpp": "c6ee4a9e3ad2015a51f0c9c68c0991f430ae4c56d6ea76deefc6d6a5fd7c0041",
+    "js/src/vm/CamoufoxMonitor.cpp": "b8c48e945a8255d1baa976afa50ca723d17e5ee8043e13963ce8824973dcb18c",
     "js/src/vm/CamoufoxMonitor.h": "9e4d664e6de919e13b3f3daa86b3866f456d6e1d731edeecc08c7394c41a524d",
     "js/src/vm/CamoufoxMonitorBuffer.h": "d35276d2f9aa33c4d3f4fbea81b105ce90a3f2496fa2ae050c9404116ee0b473"
   },
