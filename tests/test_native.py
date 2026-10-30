@@ -23,7 +23,7 @@ class BufferTests(unittest.TestCase):
             subprocess.run([
                 os.environ.get("CXX", "g++"), "-std=c++17", "-Wall", "-Wextra",
                 "-Werror", "-fsanitize=undefined", "-fno-sanitize-recover=all",
-                "-I", str(ROOT / "additions/dom/bindings"),
+                "-I", str(ROOT / "additions/js/public/experimental"),
                 str(ROOT / "tests/test_buffer.cpp"), "-o", str(binary),
             ], check=True)
             result = subprocess.run([str(binary)], capture_output=True, text=True, check=True)

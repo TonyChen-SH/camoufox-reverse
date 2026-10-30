@@ -1,11 +1,15 @@
 /* Exercise distinct generated WebIDL paths without making external requests. */
-export async function runGenericProbe() {
+export async function runGenericProbe(reportPhase = () => {}) {
   const observed = {};
+  reportPhase("document-reflect");
   document.title = "trace-title-direct";
   observed.directTitle = document.title;
+  reportPhase("reflect-set");
   observed.reflectSet = Reflect.set(document, "title", "trace-title-reflected");
+  reportPhase("reflect-get");
   observed.reflectedTitle = Reflect.get(document, "title");
 
+  reportPhase("element-style");
   const canvas = document.createElement("canvas");
   canvas.width = 17;
   observed.canvasWidth = Reflect.get(canvas, "width");
@@ -16,10 +20,12 @@ export async function runGenericProbe() {
   element.style.backgroundColor = "rgb(78, 90, 123)";
   observed.colors = [element.style.color, element.style.backgroundColor];
 
+  reportPhase("parser");
   const parser = new DOMParser();
   const parsed = parser.parseFromString("<p>parsed-value</p>", "text/html");
   observed.parsedText = parsed.body.textContent;
 
+  reportPhase("encoder-blob");
   const encoder = new TextEncoder();
   observed.encoding = encoder.encoding;
   observed.encoded = Array.from(encoder.encode("中🦊"));
@@ -31,6 +37,7 @@ export async function runGenericProbe() {
   } finally {
     URL.revokeObjectURL(objectURL);
   }
+  reportPhase("url");
   observed.canParse = URL.canParse("/path", "https://example.test/base");
   try {
     new URL("not-an-absolute-url");
@@ -46,16 +53,19 @@ export async function runGenericProbe() {
   observed.pathname = url.pathname;
   observed.constructorConversions = conversions;
 
+  reportPhase("storage");
   Storage.prototype.setItem.call(localStorage, "camoufox-trace-key", "stored-value");
   try {
     observed.storedValue = Storage.prototype.getItem.apply(localStorage, ["camoufox-trace-key"]);
   } finally {
     localStorage.removeItem("camoufox-trace-key");
   }
+  reportPhase("permissions");
   const permissionPromise = navigator.permissions.query({name: "geolocation"});
   observed.permissionPromise = permissionPromise instanceof Promise;
   observed.permissionCompleted = typeof (await permissionPromise).state === "string";
 
+  reportPhase("peer-connection");
   const peer = new RTCPeerConnection({iceServers: []});
   observed.peerState = peer.signalingState;
   peer.close();

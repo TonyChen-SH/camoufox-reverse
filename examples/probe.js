@@ -1,4 +1,5 @@
 /* Local smoke fixture: use the source lines in the resulting native events. */
+let probePhase = "navigator";
 (async () => {
   const observed = {
     userAgent: navigator.userAgent,
@@ -7,6 +8,7 @@
     hardwareConcurrency: navigator.hardwareConcurrency,
     screen: [screen.width, screen.height],
   };
+  probePhase = "canvas";
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = 8;
   const context = canvas.getContext("2d");
@@ -26,15 +28,19 @@
   let conversions = 0;
   canvas.toDataURL({toString() { conversions++; return "image/png"; }});
   observed.argumentConversions = conversions;
+  probePhase = "webgl";
   for (const kind of ["webgl", "webgl2"]) {
     const gl = document.createElement("canvas").getContext(kind);
     observed[kind] = gl ? gl.getParameter(gl.VERSION) : "unavailable";
   }
+  probePhase = "audio";
   const audio = new AudioBuffer({length: 16, sampleRate: 44100});
   observed.audioLength = audio.getChannelData(0).length;
   audio.copyFromChannel(new Float32Array(4), 0, 1);
+  probePhase = "generic-module";
   const {runGenericProbe} = await import("./generic.js");
-  observed.generic = await runGenericProbe();
+  observed.generic = await runGenericProbe(phase => { probePhase = "generic:" + phase; });
+  probePhase = "worker";
   const worker = new Worker("worker.js");
   try {
     observed.worker = await new Promise((resolve, reject) => {
@@ -47,5 +53,8 @@
   }
   document.querySelector("#result").textContent = JSON.stringify(observed, null, 2);
 })().catch(error => {
-  document.querySelector("#result").textContent = "Fixture failed: " + error.stack;
+  document.querySelector("#result").textContent = "Fixture failed: " + JSON.stringify({
+    phase: probePhase, name: error?.name, message: error?.message,
+    stack: error?.stack, value: String(error),
+  }, null, 2);
 });

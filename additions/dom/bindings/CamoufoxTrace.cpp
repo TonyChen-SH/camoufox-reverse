@@ -3,7 +3,7 @@
  * You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "CamoufoxTrace.h"
-#include "CamoufoxTraceBuffer.h"
+#include "js/experimental/CamoufoxTraceBuffer.h"
 
 #include <atomic>
 #include <cerrno>
