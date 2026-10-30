@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -153,6 +154,46 @@ class ExactTraceContractTests(unittest.TestCase):
             self.assertEqual(report["status"], "failed")
             self.assertEqual(report["checks"]["off_capture"]["status"], "failed")
             self.assertEqual(report["checks"]["sampled_ion"]["status"], "not_run")
+
+
+class ProductionReaderIntegrationTests(unittest.TestCase):
+    def run_off_reader(self, trace):
+        # Only process launch is replaced: validation consumes the real public Reader API.
+        from camoufox_trace_mcp import collector
+
+        outcome = {"collector_schema": 1, "event": "collection", "termination": "normal_exit",
+                   "returncode": 0, "output_limited": False, "stderr_drain_incomplete": False}
+
+        def launch(argv, output, **kwargs):
+            if "on" in argv:
+                raise RuntimeError("Controlled ON launch failure after OFF reader")
+            Path(output).write_text(trace, encoding="utf-8")
+            Path(output).with_name("page.json").write_text("{}", encoding="utf-8")
+            return outcome
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "run"
+            with patch.object(collector, "collect", side_effect=launch):
+                self.assertEqual(ion.validate(Path(sys.executable), output), 1)
+            return json.loads((output / "ion-report.json").read_text())
+
+    def test_public_capture_interface_reads_off_before_controlled_on_failure(self):
+        from camoufox_trace_mcp.reader import MAX_RECORDS
+
+        trace = json.dumps({"collector_schema": 1, "event": "collection",
+                            "termination": "normal_exit", "returncode": 0,
+                            "output_limited": False, "stderr_drain_incomplete": False}) + "\n"
+        report = self.run_off_reader(trace)
+        self.assertEqual(report["checks"]["off_capture"]["status"], "passed", report)
+        self.assertEqual(report["checks"]["on_capture"]["status"], "failed")
+        self.assertIn("Controlled ON launch failure", report["checks"]["on_capture"]["error"])
+        self.assertEqual(report["budgets"]["reader_max_records"], MAX_RECORDS)
+
+    def test_real_reader_known_loss_still_fails_off_capture(self):
+        report = self.run_off_reader('{"invalid_json"\n')
+        self.assertEqual(report["checks"]["off_capture"]["status"], "failed")
+        self.assertIn("known loss", report["checks"]["off_capture"]["error"])
+        self.assertEqual(report["checks"]["on_capture"]["status"], "not_run")
 
 
 if __name__ == "__main__":

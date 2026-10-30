@@ -24,7 +24,6 @@ FUNCTIONS = ("ionRead", "ionWrite", "ionCall")
 PARAMETERS = {"warmupBatches": 2, "warmupIterations": 5000,
               "measuredIterations": 10000, "spins": 512, "pauseMs": 250}
 MAX_EVENTS = 300_000
-MAX_RECORDS = 600_000
 CHECKS = ("off_capture", "on_capture", "unchanged_results", "warmup_counts",
           "measured_counts", "off_profile", "on_profile", "sampled_ion")
 PROFILER_ENV = {
@@ -226,7 +225,7 @@ def validate(binary, output):
     report = {"status": "running", "binary": str(binary), "parameters": PARAMETERS,
               "checks": {name: {"status": "not_run"} for name in CHECKS},
               "profiler_environment": PROFILER_ENV,
-              "budgets": {"reader_max_events": MAX_EVENTS, "reader_max_records": MAX_RECORDS,
+              "budgets": {"reader_max_events": MAX_EVENTS, "reader_max_records": None,
                           "owned_loop_api_events": 80000,
                           "owned_fixed_api_events_upper_bound": 100,
                           "collector_max_output_bytes": None},
@@ -244,7 +243,9 @@ def validate(binary, output):
         require(binary.is_file() and os.access(binary, os.X_OK), f"Missing executable browser: {binary}")
         from camoufox_trace_mcp import read_capture, summarize
         from camoufox_trace_mcp.collector import DEFAULT_OUTPUT_BYTES, collect
+        from camoufox_trace_mcp.reader import MAX_RECORDS
         report["budgets"]["collector_max_output_bytes"] = DEFAULT_OUTPUT_BYTES
+        report["budgets"]["reader_max_records"] = MAX_RECORDS
         captures, pages, profiles = {}, {}, {}
         for mode in ("off", "on"):
             active = mode + "_capture"
@@ -258,7 +259,7 @@ def validate(binary, output):
             require(outcome["termination"] == "normal_exit",
                     f"{mode} collection failed: {outcome}; "
                     + (error_file.read_text(encoding="utf-8") if error_file.exists() else ""))
-            capture = read_capture(case / "trace.jsonl", max_events=MAX_EVENTS, max_records=MAX_RECORDS)
+            capture = read_capture(case / "trace.jsonl", max_events=MAX_EVENTS)
             summary = summarize(capture, channel="engine")
             require(summary["integrity"] == "no_known_loss", f"{mode} known loss: {summary['statuses']}")
             require(all(event.get("channel") == "engine" for event in capture.events),

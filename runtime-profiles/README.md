@@ -51,7 +51,7 @@ then 10,000 measured iterations. Both warmup and measured phases require exactly
 10,000 of each operation: host get, host set, method reference and native call.
 The runner preserves all 80,000 loop API events and checks OFF/ON page values
 against an independent arithmetic result. Its explicit limits are 300,000
-events, 600,000 records and 67,043,328 collected output bytes; hitting any limit
+events, the production reader's 200,000-record limit and 67,043,328 collected output bytes; hitting any limit
 fails the profile.
 
 Acceptance additionally requires native samples whose referenced stack chains
