@@ -33,6 +33,8 @@
   const audio = new AudioBuffer({length: 16, sampleRate: 44100});
   observed.audioLength = audio.getChannelData(0).length;
   audio.copyFromChannel(new Float32Array(4), 0, 1);
+  const {runGenericProbe} = await import("./generic.js");
+  observed.generic = await runGenericProbe();
   const worker = new Worker("worker.js");
   try {
     observed.worker = await new Promise((resolve, reject) => {
@@ -45,5 +47,5 @@
   }
   document.querySelector("#result").textContent = JSON.stringify(observed, null, 2);
 })().catch(error => {
-  document.querySelector("#result").textContent = error.stack;
+  document.querySelector("#result").textContent = "Fixture failed: " + error.stack;
 });

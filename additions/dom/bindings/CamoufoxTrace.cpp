@@ -25,6 +25,7 @@
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "js/Class.h"
+#include "js/CallArgs.h"
 #include "js/ColumnNumber.h"
 #include "js/Exception.h"
 #include "js/GlobalObject.h"
@@ -129,9 +130,10 @@ void Metadata() {
   JsonBuffer<512> record;
   record.Raw("CAMOUFOX_TRACE {\"schema\":1,\"event\":\"meta\",\"pid\":");
   record.UInt(ProcessId());
-  record.Raw(",\"transport\":\"stderr\",\"coverage\":\"binding-pilot\","
-             "\"producer\":\"camoufox-reverse-pilot\",\"firefox\":\"158.0.1\","
+  record.Raw(",\"transport\":\"stderr\",\"coverage\":\"webidl-bindings\","
+             "\"producer\":\"camoufox-reverse\",\"firefox\":\"158.0.1\","
              "\"camoufox_commit\":\"b6205b0ee1e4c2e8e4bb9eb0e084472028a9c6a3\","
+             "\"caller_filter\":\"scripted-nonsystem-realm\","
              "\"source_column\":\"one-origin\",\"max_events\":");
   record.UInt(Configuration().maxEvents);
   record.Raw("}\n");
@@ -190,8 +192,9 @@ void Value(JSContext* cx, JS::HandleValue value, JsonBuffer<Size>& output) {
 struct State {
   JSContext* cx;
   JS::Value* returnValue;
-  const char* api;
+  char api[256];
   const char* operation;
+  const char* scope;
   uint64_t sequence;
   uint64_t started;
   JsonBuffer<1024> source;
@@ -201,12 +204,23 @@ struct State {
   const char* realm = nullptr;
 };
 
-static State* Begin(JSContext* cx, JS::Value* returnValue, const char* api,
-                    const char* operation, const JSJitMethodCallArgs* args) {
+static State* Begin(JSContext* cx, JS::Value* returnValue,
+                    const char* interface, const char* member,
+                    const char* operation, const char* scope,
+                    unsigned length, const JS::Value* arguments) {
   if (!Configuration().enabled || gRecording || gSaturated.load()) return nullptr;
+  JS::Realm* realm = JS::GetCurrentRealmOrNull(cx);
+  if (!realm || js::IsSystemRealm(realm)) return nullptr;
   Recording recording;
   const int previousErrno = errno;
   PreserveException saved(cx);
+  JS::AutoFilename filename;
+  uint32_t line = 0;
+  JS::ColumnNumberOneOrigin column;
+  if (!JS::DescribeScriptedCaller(&filename, cx, &line, &column)) {
+    errno = previousErrno;
+    return nullptr;
+  }
   std::call_once(gMetadata, Metadata);
   if (gSaturated.load()) {
     errno = previousErrno;
@@ -231,29 +245,29 @@ static State* Begin(JSContext* cx, JS::Value* returnValue, const char* api,
     return nullptr;
   }
   state->cx = cx; state->returnValue = returnValue;
-  state->api = api; state->operation = operation;
-  state->sequence = sequence + 1; state->started = Now();
-  JS::AutoFilename filename;
-  uint32_t line = 0;
-  JS::ColumnNumberOneOrigin column;
-  state->source.Raw("{\"url\":");
-  if (JS::DescribeScriptedCaller(&filename, cx, &line, &column)) {
-    if (filename.get()) state->source.String(filename.get(), 384);
-    else state->source.Raw("null");
-    state->source.Raw(",\"line\":"); state->source.UInt(line);
-    state->source.Raw(",\"column\":"); state->source.UInt(column.oneOriginValue());
-  } else {
-    state->source.Raw("null,\"line\":null,\"column\":null");
+  int apiLength = std::snprintf(state->api, sizeof(state->api), "%s.%s", interface, member);
+  if (apiLength < 0 || static_cast<size_t>(apiLength) >= sizeof(state->api)) {
+    delete state;
+    gSaturated.store(true);
+    Limit(gEmitted.load(), "api_name_overflow");
+    errno = previousErrno;
+    return nullptr;
   }
+  state->operation = operation; state->scope = scope;
+  state->sequence = sequence + 1; state->started = Now();
+  state->source.Raw("{\"url\":");
+  if (filename.get()) state->source.String(filename.get(), 384);
+  else state->source.Raw("null");
+  state->source.Raw(",\"line\":"); state->source.UInt(line);
+  state->source.Raw(",\"column\":"); state->source.UInt(column.oneOriginValue());
   state->source.Raw("}");
   if (JSObject* global = JS::CurrentGlobalOrNull(cx)) {
     state->realm = JS::GetClass(global)->name;
   }
   state->arguments.Raw("[");
-  unsigned length = args ? args->length() : 0;
   for (unsigned i = 0; i < length && i < 4; ++i) {
     if (i) state->arguments.Raw(",");
-    JS::RootedValue argument(cx, args->get(i));
+    JS::RootedValue argument(cx, arguments[i]);
     Value(cx, argument, state->arguments);
   }
   if (length > 4) state->arguments.MarkTruncated();
@@ -261,7 +275,6 @@ static State* Begin(JSContext* cx, JS::Value* returnValue, const char* api,
   JS::RootedObject frames(cx);
   JS::RootedString stack(cx);
   if (Configuration().stack) {
-    JS::Realm* realm = JS::GetCurrentRealmOrNull(cx);
     if (JS::CaptureCurrentStack(cx, &frames,
                                 JS::StackCapture(JS::MaxFrames(12))) &&
         realm && JS::BuildStackString(cx, JS::GetRealmPrincipals(realm),
@@ -291,8 +304,9 @@ static void Finish(State* state) {
   record.Raw(",\"seq\":"); record.UInt(state->sequence);
   record.Raw(",\"mono_us\":"); record.UInt(state->started);
   record.Raw(",\"duration_us\":"); record.UInt(Now() - state->started);
-  record.Raw(",\"api\":"); record.String(state->api, 96);
-  record.Raw(",\"op\":"); record.String(state->operation, 8);
+  record.Raw(",\"api\":"); record.String(state->api, 255);
+  record.Raw(",\"op\":"); record.String(state->operation, 16);
+  record.Raw(",\"scope\":"); record.String(state->scope, 16);
   record.Raw(",\"source\":"); record.Raw(state->source.View());
   record.Raw(",\"realm_class\":");
   if (state->realm) record.String(state->realm, 64);
@@ -301,9 +315,11 @@ static void Finish(State* state) {
   record.Raw(",\"result\":");
   if (threw) {
     record.Raw("{\"type\":\"unavailable\",\"reason\":\"exception\"}");
-  } else {
+  } else if (state->returnValue) {
     JS::RootedValue result(state->cx, *state->returnValue);
     Value(state->cx, result, record);
+  } else {
+    record.Raw("{\"type\":\"undefined\"}");
   }
   record.Raw(threw ? ",\"threw\":true" : ",\"threw\":false");
   record.Raw(",\"stack\":"); record.Raw(state->stack.View());
@@ -323,12 +339,27 @@ static void Finish(State* state) {
 }
 
 AutoTraceMethod::AutoTraceMethod(JSContext* cx, const JSJitMethodCallArgs& args,
-                                 const char* name)
-    : mState(Begin(cx, args.rval().address(), name, "call", &args)) {}
+                                 const char* interface, const char* member)
+    : mState(Begin(cx, args.rval().address(), interface, member, "call", "instance",
+                   args.length(), args.length() ? args[0].address() : nullptr)) {}
 AutoTraceMethod::~AutoTraceMethod() { Finish(mState); }
 AutoTraceGetter::AutoTraceGetter(JSContext* cx, JSJitGetterCallArgs args,
-                                 const char* name)
-    : mState(Begin(cx, args.rval().address(), name, "get", nullptr)) {}
+                                 const char* interface, const char* member)
+    : mState(Begin(cx, args.rval().address(), interface, member, "get", "instance", 0, nullptr)) {}
 AutoTraceGetter::~AutoTraceGetter() { Finish(mState); }
+
+AutoTraceSetter::AutoTraceSetter(JSContext* cx, JSJitSetterCallArgs args,
+                                 const char* interface, const char* member)
+    : mState(Begin(cx, nullptr, interface, member, "set", "instance", 1, args[0].address())) {}
+AutoTraceSetter::~AutoTraceSetter() { Finish(mState); }
+
+AutoTraceNative::AutoTraceNative(JSContext* cx, unsigned argc, JS::Value* vp,
+                                 const char* interface, const char* member,
+                                 const char* operation, const char* scope) {
+  const auto args = JS::CallArgsFromVp(argc, vp);
+  mState = Begin(cx, std::strcmp(operation, "set") == 0 ? nullptr : args.rval().address(),
+                 interface, member, operation, scope, args.length(), args.array());
+}
+AutoTraceNative::~AutoTraceNative() { Finish(mState); }
 
 }  // namespace mozilla::camoutrace
