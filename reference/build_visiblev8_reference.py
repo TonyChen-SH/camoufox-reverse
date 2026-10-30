@@ -137,6 +137,7 @@ def build(reference, work, target, logs, delivery, lock, jobs):
             "is_component_build=false", "use_remoteexec=false", "use_siso=false",
             'cc_wrapper="ccache"',
             "v8_enable_lazy_source_positions=false", "vv8_trace_properties=true",
+            "v8_use_metagen_instance_types=false",
             "v8_enable_debugging_features=true", "v8_enable_object_print=true",
             "v8_enable_disassembler=true", "v8_enable_backtrace=true"]
     if target == "v8-shell":

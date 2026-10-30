@@ -9,6 +9,15 @@ The source profile is Chromium **155.0.8059.30**, V8 **15.5.35.14**.
 Chromium DEPS, the upstream patch, Go, Rust and the isolated PostgreSQL source.
 No moving Docker tag or older browser release is accepted as this profile.
 
+The build explicitly selects V8's supported Torque instance-type generator
+(`v8_use_metagen_instance_types=false`). In this pin, the default metagen
+harvest suppresses generated enum definitions while headers still reference
+them; the original shell build failed on undeclared Wasm/Builtin types. The
+pin retains Torque as the reference generator used by metagen's own comparison
+mode. This configuration choice is recorded in the binary provenance; it does
+not disable Wasm, JIT tiers or logging, and all runtime assertions remain in
+force. The failed default-metagen build is retained as separate evidence.
+
 The workflow runs three independent jobs:
 
 - The original Go and Rust postprocessors run over a controlled full-origin
