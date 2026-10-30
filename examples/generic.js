@@ -4,7 +4,9 @@ export async function runGenericProbe(reportPhase = () => {}) {
   reportPhase("document-reflect");
   document.title = "trace-title-direct";
   observed.directTitle = document.title;
+  reportPhase("reflect-set");
   observed.reflectSet = Reflect.set(document, "title", "trace-title-reflected");
+  reportPhase("reflect-get");
   observed.reflectedTitle = Reflect.get(document, "title");
 
   reportPhase("element-style");

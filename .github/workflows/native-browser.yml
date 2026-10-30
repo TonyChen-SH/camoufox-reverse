@@ -188,6 +188,7 @@ jobs:
           name: camoufox-trace-candidate-linux-x86_64
           path: dist
       - name: Verify and unpack the built browser
+        id: unpack
         run: |
           cd dist
           sha256sum --check SHA256SUMS
@@ -201,6 +202,7 @@ jobs:
       - name: Real browser trace and MCP round trip
         run: xvfb-run -a python tools/runtime_check.py --binary "$CAMOUFOX_BINARY" --output evidence/runtime
       - name: Engine operations, complete source and seven-tool MCP conformance
+        if: ${{ !cancelled() && steps.unpack.outcome == 'success' }}
         run: xvfb-run -a python tools/engine_runtime_check.py --binary "$CAMOUFOX_BINARY" --output evidence/engine
       - name: Complete upstream browser behaviour guards and fingerprint checks
         working-directory: upstream
