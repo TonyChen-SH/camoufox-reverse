@@ -55,7 +55,7 @@ def transform(path, data):
                     trace_class = "AutoTraceNative"
             if trace_class:
                 interface = self.descriptor.interface.identifier.name
-                name = member.identifier.name
+                name = GetWebExposedName(member, self.descriptor)
                 if operation:
                     scope = "constructor" if operation == "construct" else "static"
                     arguments = 'argc, vp, "%s", "%s", "%s", "%s"' % (

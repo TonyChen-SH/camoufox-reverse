@@ -110,6 +110,9 @@ class SourceTests(unittest.TestCase):
         base = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "CGAbstractMethod")
         function = next(node for node in base.body if isinstance(node, ast.FunctionDef) and node.name == "definition_prologue")
         namespace = {"indent": lambda text: textwrap.indent(text, "  ")}
+        exposed_name = next(node for node in module.body
+                            if isinstance(node, ast.FunctionDef) and node.name == "GetWebExposedName")
+        exec(compile(ast.Module(body=[exposed_name], type_ignores=[]), "Codegen.py", "exec"), namespace)
         exec(compile(ast.Module(body=[function], type_ignores=[]), "Codegen.py", "exec"), namespace)
 
         def generate(api, op, static=False, template_common=False):
@@ -127,7 +130,8 @@ class SourceTests(unittest.TestCase):
                 _template=lambda: "", _decorators=lambda: "", name="binding",
                 _argstring=lambda _: "JSContext* cx, JSJitGetterCallArgs args",
                 auto_profiler_label=lambda: f"STRING_TEMPLATE_{op}",
-                descriptor=NS(interface=NS(identifier=NS(name=interface))),
+                descriptor=NS(interface=NS(identifier=NS(name=interface)),
+                              operations={"Stringifier": member if name == "__stringifier" else None}),
                 args=args,
             )
             if op == "CONSTRUCTOR": mock._ctor = member
@@ -142,12 +146,15 @@ class SourceTests(unittest.TestCase):
             ("Document.title", "SETTER", "AutoTraceSetter"),
             ("Storage.setItem", "METHOD", "AutoTraceMethod"),
             ("FutureInterface.futureMember", "GETTER", "AutoTraceGetter"),
+            ("URL.__stringifier", "METHOD", "AutoTraceMethod"),
         ):
             with self.subTest(api=api, kind=kind):
                 generated = generate(api, kind)
                 self.assertEqual(generated.count("camoufoxTrace("), 1)
                 self.assertIn(native, generated)
                 interface, member = api.split(".")
+                if member == "__stringifier":
+                    member = "toString"
                 self.assertIn(f'"{interface}", "{member}"', generated)
                 if kind != "METHOD":
                     self.assertNotIn("camoufoxTrace(", generate(api, kind, template_common=True))

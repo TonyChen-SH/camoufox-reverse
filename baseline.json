@@ -14,7 +14,7 @@
   "files": {
     "dom/bindings/Codegen.py": {
       "before": "9417c3f076288f9a828ec47ec215aa816135799d",
-      "after": "13173a8a361d105cfd3c133bdcc5c06a9336567a"
+      "after": "fb5537fd5c418c4b0960a2823c2c556537d67edc"
     },
     "dom/bindings/BindingUtils.h": {
       "before": "5b7a6a3b9513f359d95a62d19c8080e273797b50",
@@ -52,5 +52,5 @@
       "Privileged system realms and native calls without a scripted caller are excluded"
     ]
   },
-  "patch_sha256": "202ada810b948c496ec50ca3829635af854ede239d77927db8e1576acb7d2dd0"
+  "patch_sha256": "c2e47bb84ed6cd92568b3988ee6af2618d2a4c0fd6ec0e1b499112664904d74c"
 }
