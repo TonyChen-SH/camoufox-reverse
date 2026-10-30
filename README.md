@@ -6,7 +6,9 @@
 
 ## 下载与使用
 
-打开 [Native browser build and runtime](https://github.com/TonyChen-SH/camoufox-reverse/actions/workflows/native-browser.yml)，选择最近成功的通用版本运行，在 **Artifacts** 下载 **camoufox-trace-linux-x86_64**（约 1.24 GB，需要登录 GitHub）。该名称只在全部验证门禁通过后上传。通用包包含 `binding-inventory.json` 和 `examples/`；旧 16 入口 pilot 包不具备这些内容。
+[下载已验证的 Linux x86_64 安装包](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41001689611/artifacts/12954283249)（约 1.24 GB，需要登录 GitHub）。[本次运行](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41001689611)已通过全部门禁；[小体积验证证据](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41001689611/artifacts/12954542329)含完整入口清单、真实 trace 和运行报告。通用包包含 `binding-inventory.json` 和 `examples/`；旧 16 入口 pilot 包不具备这些内容。
+
+后续版本在 [Native browser build and runtime](https://github.com/TonyChen-SH/camoufox-reverse/actions/workflows/native-browser.yml) 选择成功运行的 **camoufox-trace-linux-x86_64**。该名称只在全部验证门禁通过后上传。
 
 Actions 文件保留 14 天。过期后，仓库所有者可在同一工作流选择 **Run workflow** 重新构建与验证。
 
@@ -48,15 +50,19 @@ CAMOUFOX_TRACE=1 CAMOUFOX_TRACE_STACK=1 ./bin/camoufox-bin \
 | 按 `(api, op, scope)` 去重的操作入口 | 12,852 |
 | 物理插桩位置 | 12,852 |
 
+操作入口分布为：getter **6,068**、setter **2,967**、方法调用 **3,396**、构造 **421**；作用域分布为实例 **11,979**、静态 **452**、构造 **421**。
+
 清单统计生成入口，不代表每个成员都可从任意网页访问，也不是网站风控规则数。完整条目、文件来源和读写/调用/构造分类见随包 `binding-inventory.json`。
 
 当前检查包括：
 
 - 14 个源码、安装器、生成器、真实 C++ UBSan 序列化和清单测试。
 - 49 个分析器核心测试与 1 个真实 MCP SDK stdio 集成测试。
-- 实际浏览器日志的四工具联调；已核对一份 924 事件采集，35 个必检 API 名和 24 个新增操作组合都存在，覆盖 CSS 独立属性、构造、静态方法、Reflect、Storage call/apply、Promise、WebRTC 和 Worker。
+- 实际浏览器日志的四工具联调；最终运行带栈模式采集 929 条事件、官方 Python 启动器模式采集 1,724 条事件。35 个必检 API 名和 24 个新增操作组合都存在，覆盖 CSS 独立属性、构造、静态方法、Reflect、Storage call/apply、Promise、WebRTC 和 Worker。
 
-构建工作流还执行五种真实浏览器模式（关闭、带栈、事件上限、非法配置、官方 Python 启动器）、确定性页面结果开关对照、全部 57 个上游补丁守卫和完整 build-tester。全部通过后才提供验证版安装包；每次运行的实际结果见其 `runtime-report.json`、`patch-guards.json`、`build-tester.json` 和 **native-browser-evidence**，不能把仅编译成功当成全部测试通过。
+[最终运行验证](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41001689611/job/123887611590)通过五种真实浏览器模式（关闭、带栈、事件上限、非法配置、官方 Python 启动器），确定性页面结果开关对照一致，MCP 联调通过。全部 **56/56** 个上游补丁守卫通过；完整 build-tester 在 **8 组配置下通过 1,048/1,048 项检查，等级 A**。
+
+工作流每次均执行这些门禁，全部通过才提供验证版安装包。实际结果见 `runtime-report.json`、`patch-guards.json`、`build-tester.json` 和 **native-browser-evidence**；生成入口数与逐项实测数分别报告，不能把仅编译成功当成全部测试通过。
 
 ## 版本与范围
 
