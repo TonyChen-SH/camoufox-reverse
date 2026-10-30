@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "reference"))
 import build_visiblev8_reference as builder
 import reference_conformance as conformance
+import engine_build_compat as compatibility
 
 
 class ReferenceContractTests(unittest.TestCase):
@@ -66,6 +67,48 @@ class ReferenceContractTests(unittest.TestCase):
                 builder.prepare(self.reference, directory, "v8-shell", directory, self.lock)
             self.assertEqual(hashlib.sha256(sentinel.read_bytes()).hexdigest(), before)
             self.assertEqual(sorted(p.name for p in directory.iterdir()), ["user-data"])
+
+    def patched_engine(self, directory):
+        header = directory / "src/runtime/runtime-utils.h"
+        header.parent.mkdir(parents=True)
+        data = (ROOT / "reference/fixtures/runtime-utils.pristine.h").read_bytes()
+        self.assertEqual(hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest(),
+                         "345e326eed8d564e252373ec3ea714a2c3ea03d0")
+        header.write_bytes(data)
+        subprocess.run(["git", "apply", "--include=src/runtime/runtime-utils.h",
+                        "--include=src/runtime/runtime-utils.cc",
+                        str(self.reference / self.lock["v8_patch"])], cwd=directory, check=True)
+        return header, directory / "src/runtime/runtime-utils.cc"
+
+    def test_build_compatibility_uses_the_exact_patch_and_preserves_logger_bodies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            engine = Path(temporary)
+            header, source = self.patched_engine(engine)
+            original_body = source.read_text().split("namespace v8::internal {", 1)[1]
+            original_declarations = header.read_text().split("namespace v8 {", 1)[1]
+            evidence = engine / "evidence"
+            manifest = compatibility.apply(engine, evidence, self.lock["v8_commit"])
+            self.assertEqual(manifest["profile"], "visiblev8-linux-build-compat.1")
+            self.assertEqual(source.read_text().split("namespace v8::internal {", 1)[1], original_body)
+            self.assertEqual(header.read_text().split("namespace v8 {", 1)[1], original_declarations)
+            self.assertNotIn("-inl.h", header.read_text())
+            self.assertIn('#include "src/api/api-inl.h"', source.read_text())
+            self.assertEqual(compatibility.verify(engine, evidence, self.lock["v8_commit"]), manifest)
+            source.write_text(source.read_text() + "// changed after generation\n")
+            with self.assertRaisesRegex(ValueError, "output changed"):
+                compatibility.verify(engine, evidence, self.lock["v8_commit"])
+
+    def test_build_compatibility_refuses_unknown_input_before_writing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            engine = Path(temporary)
+            header, source = self.patched_engine(engine)
+            header.write_text(header.read_text() + "// different source\n")
+            before = {p: p.read_bytes() for p in (header, source)}
+            evidence = engine / "evidence"
+            with self.assertRaisesRegex(ValueError, "Unknown.*input"):
+                compatibility.apply(engine, evidence, self.lock["v8_commit"])
+            self.assertEqual({p: p.read_bytes() for p in before}, before)
+            self.assertFalse(evidence.exists())
 
     def test_pinned_bootstrap_makes_the_real_python_wrapper_usable(self):
         with tempfile.TemporaryDirectory() as temporary:

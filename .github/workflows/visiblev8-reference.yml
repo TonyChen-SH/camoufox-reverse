@@ -12,87 +12,6 @@ concurrency:
   group: original-visiblev8-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
-  postprocessors:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/checkout@v4
-        with:
-          repository: wspr-ncsu/visiblev8
-          ref: 068c617f28686f5c43d27c891803cd21510aa141
-          path: original-visiblev8
-          persist-credentials: false
-      - uses: actions/checkout@v4
-        with:
-          repository: postgres/postgres
-          ref: 1f47e7b59b92c58eee6840325d1aaa6acee84194
-          path: postgres-source
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24.0'
-          cache-dependency-path: original-visiblev8/post-processor/go.sum
-      - name: Install fixed Rust and PostgreSQL build prerequisites
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends bison flex build-essential pkg-config libssl-dev
-          rustup toolchain install 1.86.0 --profile minimal
-      - name: Validate reference source and conformance oracles
-        env:
-          VISIBLEV8_REFERENCE_SOURCE: original-visiblev8
-        run: python -m unittest discover -s tests_reference -p test_reference.py -v
-      - name: Build the unmodified original processors
-        run: |
-          mkdir -p reference-evidence/bin
-          go version > reference-evidence/toolchains.txt
-          rustc +1.86.0 --version >> reference-evidence/toolchains.txt
-          git -C postgres-source rev-parse HEAD >> reference-evidence/toolchains.txt
-          cd original-visiblev8/post-processor
-          go build -mod=readonly -buildvcs=false -ldflags '-X main.Version=068c617f28686f5c43d27c891803cd21510aa141' -o ../../reference-evidence/bin/vv8-post-processor .
-          cargo +1.86.0 build --locked --release --manifest-path adblock/adblock-oracle-rs/Cargo.toml
-          cp adblock/adblock-oracle-rs/target/release/adblock-oracle-rs ../../reference-evidence/bin/adblock
-      - name: Build and start an isolated fixed PostgreSQL
-        run: |
-          cd postgres-source
-          ./configure --prefix="$RUNNER_TEMP/visiblev8-pg" --without-readline --without-zlib --without-icu > "$RUNNER_TEMP/pg-configure.log" 2>&1
-          make -j2 > "$RUNNER_TEMP/pg-build.log" 2>&1
-          make install > "$RUNNER_TEMP/pg-install.log" 2>&1
-          "$RUNNER_TEMP/visiblev8-pg/bin/initdb" -D "$RUNNER_TEMP/visiblev8-pg-data" -A trust --encoding=UTF8 --no-locale
-          "$RUNNER_TEMP/visiblev8-pg/bin/pg_ctl" -D "$RUNNER_TEMP/visiblev8-pg-data" -l "$RUNNER_TEMP/pg-server.log" -o '-h 127.0.0.1 -p 55432' start
-          echo "$RUNNER_TEMP/visiblev8-pg/bin" >> "$GITHUB_PATH"
-      - name: Check original stdout, PostgreSQL and Rust contracts
-        env:
-          PGHOST: 127.0.0.1
-          PGPORT: '55432'
-          PGUSER: runner
-          PGDATABASE: postgres
-        run: |
-          python reference/reference_conformance.py postprocessors --reference original-visiblev8 --processor reference-evidence/bin/vv8-post-processor --adblock reference-evidence/bin/adblock --postgres --output reference-evidence/postprocessors
-      - name: Stop isolated PostgreSQL
-        if: always()
-        run: |
-          if test -f "$RUNNER_TEMP/visiblev8-pg-data/postmaster.pid"; then
-            "$RUNNER_TEMP/visiblev8-pg/bin/pg_ctl" -D "$RUNNER_TEMP/visiblev8-pg-data" stop -m fast
-          fi
-          mkdir -p reference-evidence/postgres-build
-          for logfile in pg-configure.log pg-build.log pg-install.log pg-server.log; do
-            if test -f "$RUNNER_TEMP/$logfile"; then
-              cp "$RUNNER_TEMP/$logfile" reference-evidence/postgres-build/
-            fi
-          done
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: original-visiblev8-postprocessor-evidence
-          path: reference-evidence/
-          retention-days: 14
-          if-no-files-found: error
   v8-shell:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
@@ -124,7 +43,8 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: .reference-ccache
-          key: original-v8-shell-${{ hashFiles('reference/visiblev8.json', 'reference/build_visiblev8_reference.py') }}
+          key: original-v8-shell-${{ hashFiles('reference/visiblev8.json', 'reference/build_visiblev8_reference.py', 'reference/engine_build_compat.py') }}
+          restore-keys: original-v8-shell-
       - name: Compile the original VisibleV8 shell
         run: python reference/build_visiblev8_reference.py --reference original-visiblev8 --work .reference-shell-work --output reference-shell --target v8-shell --phase build --jobs 2
       - name: Run all nine original goldens and optimized loop checks
@@ -135,7 +55,18 @@ jobs:
         if: always()
         with:
           path: .reference-ccache
-          key: original-v8-shell-${{ hashFiles('reference/visiblev8.json', 'reference/build_visiblev8_reference.py') }}
+          key: original-v8-shell-${{ hashFiles('reference/visiblev8.json', 'reference/build_visiblev8_reference.py', 'reference/engine_build_compat.py') }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-visiblev8-v8-shell-evidence
+          path: |
+            reference-shell/logs/
+            reference-shell/runtime/
+            reference-shell/build-report.json
+            reference-shell/bin/provenance.json
+          retention-days: 14
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -188,7 +119,8 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: .reference-ccache
-          key: original-chromium-headless-${{ hashFiles('reference/visiblev8.json', 'reference/build_visiblev8_reference.py') }}
+          key: original-chromium-headless-${{ hashFiles('reference/visiblev8.json', 'reference/build_visiblev8_reference.py', 'reference/engine_build_compat.py') }}
+          restore-keys: original-chromium-headless-
       - name: Compile one Linux headless browser
         run: python reference/build_visiblev8_reference.py --reference original-visiblev8 --work .reference-browser-work --output reference-browser --target headless-shell --phase build --jobs 2
       - name: Capture controlled browser semantics
@@ -197,7 +129,18 @@ jobs:
         if: always()
         with:
           path: .reference-ccache
-          key: original-chromium-headless-${{ hashFiles('reference/visiblev8.json', 'reference/build_visiblev8_reference.py') }}
+          key: original-chromium-headless-${{ hashFiles('reference/visiblev8.json', 'reference/build_visiblev8_reference.py', 'reference/engine_build_compat.py') }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-visiblev8-headless-shell-evidence
+          path: |
+            reference-browser/logs/
+            reference-browser/runtime/
+            reference-browser/build-report.json
+            reference-browser/bin/provenance.json
+          retention-days: 14
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:

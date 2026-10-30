@@ -1,7 +1,8 @@
 # Original VisibleV8 reference gates
 
-These gates build and execute the original BSD-3-Clause VisibleV8 source at
-`068c617f28686f5c43d27c891803cd21510aa141`. They do not substitute a Python
+These gates build and execute the BSD-3-Clause VisibleV8 instrumentation at
+`068c617f28686f5c43d27c891803cd21510aa141`, with the explicitly identified
+Linux build compatibility repair described below. They do not substitute a Python
 implementation for its Go aggregators or its Rust adblock engine.
 
 The source profile is Chromium **155.0.8059.30**, V8 **15.5.35.14**.
@@ -18,13 +19,22 @@ mode. This configuration choice is recorded in the binary provenance; it does
 not disable Wasm, JIT tiers or logging, and all runtime assertions remain in
 force. The failed default-metagen build is retained as separate evidence.
 
-The workflow runs three independent jobs:
+The next actual source compile identified an upstream include cycle:
+`isolate.h` includes `runtime-utils.h` under `DEBUG`, while VisibleV8's patched
+header includes `api-inl.h` and therefore uses `Isolate` before its definition.
+The `visiblev8-linux-build-compat.1` profile moves that entire implementation
+include block into `runtime-utils.cc`; the header keeps its original object
+include, the required vector declaration and all original logger declarations.
+No logging function body or optimization setting changes. The generator verifies
+both exact input hashes, emits a reviewable diff and before/after manifest, and
+records the profile in binary provenance. The upstream VisibleV8 checkout and
+patch remain intact; this source build is not described as unmodified upstream.
+Both failed default builds remain separate evidence. The small pristine-header
+test fixture is V8 blob `345e326eed8d564e252373ec3ea714a2c3ea03d0` at the same
+V8 pin; its BSD notice is retained in `fixtures/LICENSE.v8`.
 
-- The original Go and Rust postprocessors run over a controlled full-origin
-  wire fixture with fixed interface, entity and ABP-rule data. Every accepted
-  mode is executed; return codes, output and database row counts are retained.
-  The synthetic entity/rule data exercises engine semantics and is not a
-  production tracker ownership or EasyList data set.
+The source-build workflow runs two independent jobs:
+
 - The original standalone V8 shell is built from the pinned V8 source. All
   nine upstream `trace-apis-obj` goldens are compared with the upstream
   relabeler, using the same `--no-maglev --no-turbofan` flags as its runner.
@@ -35,10 +45,24 @@ The workflow runs three independent jobs:
   construction, eval/Function, object arguments and Workers. Its optimized
   hot paths require exactly 6,000 property reads and 4,096 native calls.
 
-The two source builds run separately from postprocessing so a slow browser
-compile does not prevent format/analysis feedback. Compiler cache keys include
-the reference lock and driver. The jobs retain binaries, provenance, original
-notices, runtime traces and evidence for 14 days. No API credentials are written
+The independent `visiblev8-postprocessors.yml` workflow verifies the original
+Go, fixed-rule Rust and PostgreSQL contracts alongside the explicitly identified
+`camoufox-adapter.1` repaired profile. It preserves the raw original failures
+and accepts only their exact known signatures as `expected_upstream_failure`;
+unknown original failures and every repaired supported-profile failure fail the
+gate. This includes the three observed original SQL failures, incorrect entity
+column values and swallowed adblock errors. The source-build workflow delegates
+postprocessing to that independent gate. The postprocessor fixture uses fixed interface,
+entity and ABP-rule data, not a production ownership or EasyList data set.
+
+The two source builds run separately from this postprocessing gate, so a slow
+browser compile does not prevent format/analysis feedback. Compiler cache keys
+include the reference lock, driver and compatibility generator; ccache validates source
+and compiler content when restoring a prior compatible cache. The jobs retain
+binaries, provenance, original notices, runtime traces and evidence for 14 days.
+Small log/runtime/provenance artifacts are also published separately, so raw
+traces remain downloadable without first downloading a full Chromium binary.
+No API credentials are written
 to source checkouts. The upstream reference's sandbox changes apply only to
 this isolated CI reference; Camoufox's sandbox is unchanged by these jobs.
 
@@ -77,8 +101,10 @@ do not emit stdout payloads; `idlapis` has no stdout dumper; `callargs` has no
 PostgreSQL writer. The adblock aggregator starts an unjoined readout goroutine,
 so its observed row count is reported as a limitation and is not counted as a
 deterministic pass. The original Rust oracle is tested directly with fixed
-rules. Other upstream failures remain failures in the report; an attempted
-mode is never silently called successful.
+rules. The independent gate requires the repaired adblock aggregator to finish
+synchronously and strictly checks fixed decisions and error propagation. Original
+failures remain failures in their raw report with a separate expected-failure
+classification; an attempted mode is never silently called successful.
 
 `report.json` identifies the tested product profile. Passing these Linux jobs
 does not establish native Android Gin/WebView emission, every browser API,

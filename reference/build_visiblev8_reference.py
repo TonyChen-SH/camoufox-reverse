@@ -11,6 +11,8 @@ import subprocess
 import sys
 import time
 
+import engine_build_compat
+
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "reference/visiblev8.json"
 
@@ -112,6 +114,7 @@ def prepare(reference, work, target, logs, lock):
     patch = reference / lock["v8_patch"]
     run(["git", "apply", "--check", str(patch)], engine, logs / "v8-patch-check.log")
     run(["git", "apply", str(patch)], engine, logs / "v8-patch.log")
+    engine_build_compat.apply(engine, logs, lock["v8_commit"])
     if target == "headless-shell":
         companion = reference / lock["chromium_patch"]
         run(["git", "apply", "--check", str(companion)], source,
@@ -126,6 +129,8 @@ def build(reference, work, target, logs, delivery, lock, jobs):
     expected = lock["v8_commit"] if target == "v8-shell" else lock["chromium_commit"]
     if head(source) != expected:
         raise ValueError("Build source revision mismatch")
+    engine = source if target == "v8-shell" else source / "v8"
+    compatibility = engine_build_compat.verify(engine, logs, lock["v8_commit"])
     depot = work / "depot_tools"
     if head(depot) != lock["depot_tools_commit"]:
         raise ValueError("Build tools revision mismatch")
@@ -178,6 +183,7 @@ def build(reference, work, target, logs, delivery, lock, jobs):
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(notice, destination)
     provenance = dict(lock, target=target, gn_args=args, resources=copied,
+                      build_compatibility=compatibility,
                       binary_sha256=hashlib.sha256((out / binary).read_bytes()).hexdigest())
     (delivery / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     print(json.dumps({"status": "built", "target": target,
