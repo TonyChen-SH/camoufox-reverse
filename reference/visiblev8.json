@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/wspr-ncsu/visiblev8",
+  "commit": "068c617f28686f5c43d27c891803cd21510aa141",
+  "chromium_commit": "a17dbb3e325efe798bb372f32370ee7f67093bc5",
+  "chromium_version": "155.0.8059.30",
+  "v8_commit": "82b65fdd7b5847a41e76c9eeb04351ebec267785",
+  "v8_version": "15.5.35.14",
+  "depot_tools_commit": "dca727ba1f8fa8f1e3b12a815d065818bb61d395",
+  "v8_patch": "patches/a17dbb3e325efe798bb3/trace-apis.diff",
+  "v8_patch_sha256": "aabd056d7698676c8f8d07a677a2205c2ebba719ca2a8226e0e7ef4a9fcfb74d",
+  "chromium_patch": "patches/a17dbb3e325efe798bb3/chrome-sandbox.diff",
+  "go_version": "1.24.0",
+  "rust_version": "1.86.0",
+  "postgres_commit": "1f47e7b59b92c58eee6840325d1aaa6acee84194",
+  "postgres_version": "16.6",
+  "chromium_patch_sha256": "628ee4a8fd25fbc826a424570495fcbf471db75c1c5639f537df1a9d0f4e91de"
+}

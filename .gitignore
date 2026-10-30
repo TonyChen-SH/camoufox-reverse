@@ -4,3 +4,11 @@ __pycache__/
 .test-source/
 *.jsonl
 *.log
+
+.reference-*-work/
+.reference-ccache/
+reference-evidence/
+reference-shell/
+reference-browser/
+original-visiblev8/
+postgres-source/
