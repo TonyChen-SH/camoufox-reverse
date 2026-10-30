@@ -16,6 +16,10 @@
   values.namedPre = ++window.__vv8_named;
   values.namedPost = window.__vv8_named++;
   values.namedAfter = window.__vv8_named;
+  window.__vv8_sequence_sites = 17;
+  values.sequenceSites = (window.__vv8_sequence_sites, window.__vv8_sequence_sites);
+  window.__vv8_two_sites = 19;
+  values.twoSites = window.__vv8_two_sites ? window.__vv8_two_sites : 0;
 
   let keyConversions = 0;
   let receiverEvaluations = 0;
@@ -165,17 +169,23 @@
       iframe.src = frameURL.href;
       document.body.appendChild(iframe);
     });
+    response.closed = iframe.contentWindow.closed;
     iframe.remove();
     return response;
   }
   const crossOrigin = new URL(location.href).searchParams.get("frameOrigin");
   if (!crossOrigin) throw new Error("A second local origin is required");
   values.frames = {};
+  values.frameClosed = {};
   for (const [kind, origin] of [["same", location.origin], ["cross", crossOrigin]]) {
     const response = await frameResult(origin, kind);
     values.frames[kind] = response.value;
+    values.frameClosed[kind] = response.closed;
     contexts[kind] = response.href;
   }
+  const ccw = await runEngineCrossCompartmentCheck();
+  values.ccw = ccw.values;
+  contexts.ccw = ccw.contexts;
   const originalContextURL = location.href;
   const pushedContextURL = new URL(originalContextURL);
   pushedContextURL.searchParams.set("engineNavigation", "push");

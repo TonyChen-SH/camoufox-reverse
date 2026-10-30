@@ -16,10 +16,11 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKS = (
-    "off_capture", "on_capture", "unchanged_results", "property_attempts",
+    "off_capture", "on_capture", "unchanged_results", "property_attempts", "same_line_call_sites",
     "hot_named_read", "hot_keyed_read", "hot_write", "hot_native_call",
     "method_reference", "coercion_and_exception", "reflect_and_has",
     "dispatch_and_constructor", "eval_provenance", "contexts_and_threads", "context_navigation",
+    "cross_compartment_wrappers",
     "full_source_and_utf16", "long_argument_and_fragmentation", "excluded_categories",
     "raw_export_roundtrip", "mcp_sdk",
 )
@@ -39,6 +40,7 @@ def expected_values():
     return {
         "methodReference": "function", "missing": True, "missingKeyed": True,
         "namedBefore": 3, "namedPre": 6, "namedPost": 6, "namedAfter": 7,
+        "sequenceSites": 17, "twoSites": 19,
         "keyedPost": 6, "keyedAfter": 7,
         "coercion": {"keyConversions": 3, "receiverEvaluations": 3,
                      "rhsEvaluations": 1, "rhsConversions": 1},
@@ -58,6 +60,10 @@ def expected_values():
         "unicode": {"value": 31, "length": len(long_argument().encode("utf-16-le")) // 2},
         "worker": {"value": 19, "pathname": "/worker"},
         "frames": {"same": 23, "cross": 23},
+        "frameClosed": {"same": False, "cross": False},
+        "ccw": {"control": [11, 13, 17], "foreign": [41, 43, 47], "foreignAfter": [42, 44, 48],
+                "methodReference": "function", "borrowed": "ccw-value", "foreignCall": "ccw-value",
+                "plainProxy": 53, "proxyTrapCount": 1},
     }
 
 
@@ -90,7 +96,7 @@ def child(binary, mode, output):
             servers.append(server)
             threads.append(thread)
         origin = f"http://127.0.0.1:{servers[0].server_port}"
-        second_origin = f"http://127.0.0.1:{servers[1].server_port}"
+        second_origin = f"http://localhost:{servers[1].server_port}"
         query = urlencode({"frameOrigin": second_origin})
         with sync_playwright() as playwright:
             browser = playwright.firefox.launch(executable_path=str(binary), headless=False,
@@ -100,6 +106,7 @@ def child(binary, mode, output):
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(f"{origin}/engine.html?{query}", wait_until="load")
+                page.locator("#ccw-run").click(timeout=60000)
                 page.wait_for_function("""() => {
                     const text = document.querySelector('#result').textContent;
                     return text.startsWith('{') || text.startsWith('Fixture failed:');
@@ -161,6 +168,86 @@ def check_context_navigation(events, contexts):
         require(matched[0].get("origin") == href,
                 f"Navigation {kind} native href differs: expected {href!r}, observed {matched[0].get('origin')!r}")
     return hrefs
+
+
+def check_frame_window_classes(events, observed):
+    require(observed["values"]["frameClosed"] == {"same": False, "cross": False},
+            "A live same/cross-origin frame was reported closed")
+    matched = [event for event in events if event["vv8_kind"] == "g"
+               and event.get("property", {}).get("value") == "closed"
+               and urlsplit((event.get("source") or {}).get("url", "")).path == "/engine.js"]
+    require(len(matched) == 2, f"Frame Window.closed reads: expected 2, observed {len(matched)}")
+    require(all(event.get("receiver", {}).get("class") == "Window" for event in matched),
+            "Same/cross-origin Window.closed lost its native Window receiver class")
+    main_pids = {event["pid"] for event in matched}
+    cross_pids = {event["pid"] for event in events
+                  if event.get("origin") == observed["contexts"]["cross"]}
+    return {"reads": len(matched), "receiver_classes": [event["receiver"]["class"] for event in matched],
+            "main_pids": sorted(main_pids), "cross_frame_pids": sorted(cross_pids),
+            "cross_process_frame_observed": bool(cross_pids - main_pids)}
+
+
+def check_same_line_sites(events, source):
+    report = {}
+    for name in ("__vv8_sequence_sites", "__vv8_two_sites"):
+        token = "window." + name
+        candidates = []
+        prefix = 0
+        for number, line in enumerate(source.splitlines(keepends=True), 1):
+            if line.count(token) == 2:
+                columns = [len(line[:index].encode("utf-16-le")) // 2 + 1
+                           for index in (line.index(token), line.rindex(token))]
+                candidates.append((number, columns, [prefix + column - 1 for column in columns]))
+            prefix += len(line.encode("utf-16-le")) // 2
+        require(len(candidates) == 1, f"The {name} fixture must contain one line with two property expressions")
+        number, columns, offsets = candidates[0]
+        matched = [event for event in events if event["vv8_kind"] == "g"
+                   and event.get("property", {}).get("value") == name]
+        require(len(matched) == 2, f"{name}: expected two source sites, observed {len(matched)} events")
+        actual = sorted(event["source_offset"] for event in matched)
+        require(actual == offsets, f"{name} source offsets differ: expected {offsets}, observed {actual}")
+        for event, column in zip(sorted(matched, key=lambda item: item["source_offset"]), columns):
+            position = event.get("source") or {}
+            require(event["source_offset_unit"] == "utf16"
+                    and (position.get("line"), position.get("column")) == (number, column),
+                    f"{name} source line/UTF16 column differs at offset {event['source_offset']}")
+        report[name] = {"offsets": offsets, "line": number, "columns": columns}
+    return report
+
+
+def check_cross_compartment(events, observed):
+    source_events = [event for event in events
+                     if ((event.get("source") or {}).get("url") or "").endswith("/engine-ccw.js")]
+    report = {}
+    for role, count, operations in (("foreign", 2, ("g", "s")), ("control", 1, ("g",))):
+        for suffix, expected_class in (("window", "Window"), ("navigator", "Navigator"),
+                                       ("element", "HTMLBodyElement")):
+            name = f"__vv8_ccw_{role}_{suffix}"
+            for operation in operations:
+                expected = count if operation == "g" else 1
+                matches = [event for event in source_events if event["vv8_kind"] == operation
+                           and event.get("property", {}).get("value") == name]
+                require(len(matches) == expected,
+                        f"CCW {name} {operation}: expected {expected}, observed {len(matches)}")
+                require(all(event["receiver"].get("class") == expected_class for event in matches),
+                        f"CCW {name} has a Proxy/incorrect receiver class")
+                report[f"{role}_{suffix}_{operation}"] = len(matches)
+    native = calls(source_events, "getItem", "engine-ccw-native-key")
+    require(len(native) == 2 and all(event["receiver"].get("class") == "Storage" for event in native),
+            "Foreign/local borrowed methods must each record once with Storage receiver class")
+    reference_line = next(index for index, line in enumerate(fixture_source("engine-ccw.js").splitlines(), 1)
+                          if "const foreignReference =" in line)
+    reference = [event for event in source_events if event["vv8_kind"] == "g"
+                 and event.get("property", {}).get("value") == "getItem"
+                 and event["source"]["line"] == reference_line]
+    require(len(reference) == 1 and reference[0]["receiver"].get("class") == "Storage",
+            "The foreign method reference was not recorded once as a Storage property read")
+    require(property_count(events, "__vv8_ccw_plain", "g") == 0,
+            "A native CCW around an ordinary JavaScript Proxy was mislabeled as a host")
+    require(observed["values"]["ccw"]["proxyTrapCount"] == 1,
+            "Engine monitoring changed the ordinary JavaScript Proxy trap count")
+    report.update(native_calls=len(native), method_reference=len(reference), proxy_traps=1)
+    return report
 
 
 async def check_mcp(destination, capture, unicode_script):
@@ -276,6 +363,7 @@ def validate(binary, destination):
             "missing_keyed": count_check(events, "__vv8_missing_keyed", "g", 1),
             "named_get": count_check(events, "__vv8_named", "g", 5),
             "named_set": count_check(events, "__vv8_named", "s", 4)})
+        check("same_line_call_sites", lambda: check_same_line_sites(events, fixture_source("engine.js")))
         check("hot_named_read", lambda: count_check(events, "__vv8_hot_read", "g", 1000))
         check("hot_keyed_read", lambda: count_check(events, "__vv8_hot_keyed", "g", 1000))
         check("hot_write", lambda: {"get": count_check(events, "__vv8_hot_write", "g", 1000),
@@ -359,9 +447,11 @@ def validate(binary, destination):
             frame_ids = {(script["pid"], script["tid"], script["isolate"], script["script_id"]) for script in frames}
             require(len(frame_ids) >= 2, "Identical frame sources were merged into one native instance")
             return {"worker_instances": len(worker), "frame_instances": len(frame_ids),
-                    "producer_streams": len(capture.engine.streams), "hrefs": observed["contexts"]}
+                    "producer_streams": len(capture.engine.streams), "hrefs": observed["contexts"],
+                    "frame_window_classes": check_frame_window_classes(events, observed)}
         check("contexts_and_threads", contexts)
         check("context_navigation", lambda: check_context_navigation(events, observed["contexts"]))
+        check("cross_compartment_wrappers", lambda: check_cross_compartment(events, observed))
 
         unicode_source = fixture_source("engine-unicode.js")
         unicode_scripts = [script for script in scripts if script["source"] == unicode_source]
