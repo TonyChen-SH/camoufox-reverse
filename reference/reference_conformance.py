@@ -297,6 +297,8 @@ def browser(args, lock):
     finally:
         server.shutdown()
         thread.join()
+    (args.output / "page-observations.json").write_text(json.dumps({
+        "process": result, "observations": observations}, indent=2) + "\n")
     if result["exit_code"] or len(observations) != 1:
         raise ValueError("Original browser did not complete its controlled localhost fixture")
     observed = observations[0]
@@ -321,14 +323,15 @@ def browser(args, lock):
                 hot_calls += 1
             if line[0] == "c" and "userAgent" in fields[1]:
                 accessor_calls += 1
-    if hot_gets != 6000 or hot_calls != 4096 or not all(kinds[k] for k in "gscn$!"):
-        raise ValueError(f"Original optimized browser lost expected events: get={hot_gets}, call={hot_calls}")
-    report = dict(result, status="passed", reference=lock["commit"], profile="headless-shell",
+    lost_events = hot_gets != 6000 or hot_calls != 4096 or not all(kinds[k] for k in "gscn$!")
+    report = dict(result, status="failed" if lost_events else "passed", reference=lock["commit"], profile="headless-shell",
                   observations=observed, record_counts=dict(kinds), hot_gets=hot_gets,
                   hot_calls=hot_calls, user_agent_native_call_records=accessor_calls,
                   registered_sources=len(sources),
                   binary_sha256=hashlib.sha256(args.browser.read_bytes()).hexdigest())
     (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+    if lost_events:
+        raise ValueError(f"Original optimized browser lost expected events: get={hot_gets}, call={hot_calls}")
     print(json.dumps({k:report[k] for k in ("status", "hot_gets", "hot_calls", "user_agent_native_call_records")}))
     return 0
 

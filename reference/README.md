@@ -66,6 +66,62 @@ No API credentials are written
 to source checkouts. The upstream reference's sandbox changes apply only to
 this isolated CI reference; Camoufox's sandbox is unchanged by these jobs.
 
+The original headless job in
+[run 41018506596](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41018506596)
+reached **27,218/40,248** Ninja steps before its 330-minute job timeout. Its
+compile log has no compiler failure and it did not reach browser runtime tests.
+The log records 15 GiB RAM with 14 GiB available and 104 GiB free disk after
+setup and swap, but only two compile jobs were used on the four-core runner.
+The revised headless job records its processor count, uses four compile jobs and explicitly limits links to
+one. It retains the same instrumentation, debugging-feature configuration,
+JIT/Wasm settings and runtime assertions. It keeps the 330-minute budget; this
+resource change is not a claim that the browser has already passed.
+
+The timeout saved only **80,991,159 bytes** of compressed compiler cache, not a
+complete checkpoint of the 27,218 outputs. The actual Ubuntu package was ccache
+4.9.1-1. The pinned Chromium compile uses Clang modules; that version's
+[module documentation](https://github.com/ccache/ccache/blob/v4.9.1/doc/MANUAL.adoc#c-modules)
+explains why ordinary default ccache settings reject `-fmodules`. The old run
+did not retain cache counters, so its exact uncacheable proportion is unknown.
+
+The headless cache now enables the documented direct/depend/module profile and
+additionally hashes both generated PCM files. Before the full build it builds
+the real module prerequisites and one original Abseil C++ object, retaining
+its actual Ninja response file. It executes that exact compiler invocation
+twice, verifies that both calls were cacheable and at least one was a cache hit,
+and records the commands, PCM hashes and original machine-readable counters.
+A missing wrapper, module flag or usable cache fails this early gate. This
+checks compiler-cache behavior; it does not replace browser runtime tests.
+
+The cache limit is 4 GiB, within the observed disk budget. Unique run/attempt
+save keys allow later runs to preserve additional work instead of reusing an
+immutable existing save key. The previous cache prefix remains eligible for
+restoration. Actual ccache version/configuration, per-build statistics, effective
+GN arguments, output size and final disk/memory usage are retained for the next
+resource decision. The output directory is not represented as a persisted
+complete checkpoint; only verified cache entries are reused.
+
+After the original native build succeeds, `browser_profiles.py` runs the original
+browser gate as a subprocess and retains its exact exit code, stdout/stderr,
+page observations, raw trace, binary and provenance. It then imports the repair
+generator from the immutable provider commit recorded in
+`optimizer-profile.json`, verifies its source hash and applies only the three
+engine source repairs. The shell embedder change is prohibited for the browser.
+The same source and `out/Reference` tree are reused for the incremental build;
+the repaired binary, provenance, generated diff and runtime evidence are
+delivered under `reference-browser-repaired/`. Original delivered files remain
+unchanged and their binary/provenance hashes are checked again afterward.
+
+Both browsers run the same strict 6,000-read/4,096-native-call gate. An original
+failure is classified as `expected_upstream_failure` only for the optimizer
+loss shape already reproduced in the native shell: successful page execution, all 6,000 hot reads,
+missing hot native calls and all required record kinds, with the exact gate
+error. Its raw report still says `failed`; counts are not relaxed. Any unknown
+original failure makes the aggregate fail even if the repair succeeds. Every
+repair build or runtime failure fails. A successful aggregate is named
+`passed_repaired_profile`, never a claim that the original captured everything.
+The browser outcomes are unknown until the actual native run completes.
+
 Run the source stages on a Linux build machine with the same prerequisites as
 the workflow, from the repository root:
 

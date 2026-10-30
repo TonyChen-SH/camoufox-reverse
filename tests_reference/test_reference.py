@@ -13,6 +13,8 @@ sys.path.insert(0, str(ROOT / "reference"))
 import build_visiblev8_reference as builder
 import reference_conformance as conformance
 import engine_build_compat as compatibility
+import cache_probe
+import browser_profiles
 
 
 class ReferenceContractTests(unittest.TestCase):
@@ -29,6 +31,57 @@ class ReferenceContractTests(unittest.TestCase):
         changed = dict(self.lock, v8_patch_sha256="0" * 64)
         with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
             builder.verify_reference(self.reference, changed)
+
+    def test_resource_profile_preserves_instrumentation_and_limits_link_parallelism(self):
+        for target in ("v8-shell", "headless-shell"):
+            args = builder.gn_arguments(target)
+            for required in ('cc_wrapper="ccache"', "concurrent_links=1", "is_debug=false",
+                             "vv8_trace_properties=true", "v8_enable_lazy_source_positions=false",
+                             "v8_enable_debugging_features=true", "v8_use_metagen_instance_types=false"):
+                self.assertIn(required, args)
+            self.assertNotIn("v8_jitless=true", args)
+            self.assertNotIn("v8_enable_webassembly=false", args)
+
+    def test_module_cache_probe_rejects_uncacheable_or_hitless_compiles(self):
+        for raw in ("cache_miss 2\ndirect_cache_hit 0\n", "cache_miss 0\ncould_not_use_modules 2\n",
+                    "cache_miss 0\ndirect_cache_hit 1\ncould_not_use_modules 1\n"):
+            with self.assertRaisesRegex(ValueError, "cacheable"):
+                cache_probe.verify_hits(cache_probe.parse_stats(raw))
+        cache_probe.verify_hits(cache_probe.parse_stats("cache_miss 1\ndirect_cache_hit 1\n"))
+        cache_probe.verify_hits(cache_probe.parse_stats("cache_miss 0\ndirect_cache_hit 2\n"))
+
+    def test_module_cache_probe_uses_actual_response_file_and_rejects_bypassed_wrapper(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            (out / "compile.rsp").write_text("-fmodules -fmodule-file=obj/build/modules/system/module.pcm "
+                                           "-o " + cache_probe.OBJECT_TARGET)
+            command = "ccache ../../third_party/llvm-build/Release+Asserts/bin/clang++ @compile.rsp"
+            argv, expanded = cache_probe.validate_command(command, out)
+            self.assertEqual(argv[-1], "@compile.rsp")
+            self.assertIn("-fmodules", expanded)
+            with self.assertRaisesRegex(ValueError, "ccache"):
+                cache_probe.validate_command(command.removeprefix("ccache "), out)
+            (out / "compile.rsp").write_text("-o " + cache_probe.OBJECT_TARGET)
+            with self.assertRaisesRegex(ValueError, "module flags"):
+                cache_probe.validate_command(command, out)
+
+    def test_original_browser_missing_hot_native_calls_remains_an_explicit_failure(self):
+        report = {"status": "failed", "exit_code": 0, "hot_gets": 6000, "hot_calls": 1200,
+                  "record_counts": {kind: 1 for kind in "gscn$!"},
+                  "observations": {"hotSum": 6000, "keyConversions": 2, "argumentAccessorReads": 0}}
+        failure = {"status": "failed", "error":
+                   "Original optimized browser lost expected events: get=6000, call=1200"}
+        self.assertEqual(browser_profiles.classify_original(1, report, failure), "expected_upstream_failure")
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(browser_profiles.classify_original(1, report, {"status": "failed", "error": "other"}),
+                         "unexpected_original_failure")
+        for changed in (dict(report, hot_gets=5999), dict(report, hot_calls=4097),
+                        dict(report, exit_code=1), dict(report, record_counts={}),
+                        dict(report, observations={"error": "fixture failed"})):
+            self.assertEqual(browser_profiles.classify_original(1, changed, failure),
+                             "unexpected_original_failure")
+        self.assertEqual(browser_profiles.classify_original(0, {"status": "passed"}, {}),
+                         "passed_original_profile")
 
     def test_controlled_wire_fixture_has_real_context_and_eval_parent(self):
         parser = conformance.module(self.reference, "vlp")

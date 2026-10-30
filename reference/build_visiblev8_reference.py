@@ -12,6 +12,7 @@ import sys
 import time
 
 import engine_build_compat
+import cache_probe
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "reference/visiblev8.json"
@@ -124,6 +125,19 @@ def prepare(reference, work, target, logs, lock):
     return source, env
 
 
+def gn_arguments(target):
+    args = ["is_debug=false", "dcheck_always_on=false", "symbol_level=0",
+            "is_component_build=false", "use_remoteexec=false", "use_siso=false",
+            'cc_wrapper="ccache"', "concurrent_links=1",
+            "v8_enable_lazy_source_positions=false", "vv8_trace_properties=true",
+            "v8_use_metagen_instance_types=false",
+            "v8_enable_debugging_features=true", "v8_enable_object_print=true",
+            "v8_enable_disassembler=true", "v8_enable_backtrace=true"]
+    if target == "v8-shell":
+        args += ["v8_use_external_startup_data=false", "v8_enable_i18n_support=false"]
+    return args
+
+
 def build(reference, work, target, logs, delivery, lock, jobs):
     source = work / ("v8" if target == "v8-shell" else "src")
     expected = lock["v8_commit"] if target == "v8-shell" else lock["chromium_commit"]
@@ -138,21 +152,18 @@ def build(reference, work, target, logs, delivery, lock, jobs):
     env.update(DEPOT_TOOLS_UPDATE="0", DEPOT_TOOLS_WIN_TOOLCHAIN="0")
     env["PATH"] = str(depot) + os.pathsep + env["PATH"]
     bootstrap_depot(depot, logs, env, lock["depot_tools_commit"])
-    args = ["is_debug=false", "dcheck_always_on=false", "symbol_level=0",
-            "is_component_build=false", "use_remoteexec=false", "use_siso=false",
-            'cc_wrapper="ccache"',
-            "v8_enable_lazy_source_positions=false", "vv8_trace_properties=true",
-            "v8_use_metagen_instance_types=false",
-            "v8_enable_debugging_features=true", "v8_enable_object_print=true",
-            "v8_enable_disassembler=true", "v8_enable_backtrace=true"]
-    if target == "v8-shell":
-        args += ["v8_use_external_startup_data=false", "v8_enable_i18n_support=false"]
+    args = gn_arguments(target)
     out = source / "out/Reference"
     out.mkdir(parents=True, exist_ok=True)
     (out / "args.gn").write_text("\n".join(args) + "\n")
     gn = source / "buildtools/linux64/gn"
     run([str(gn), "gen", "out/Reference"], source, logs / "gn.log", env)
+    shutil.copy2(out / "args.gn", logs / "requested-args.gn")
+    run([str(gn), "args", "out/Reference", "--list", "--short"], source,
+        logs / "effective-gn-args.txt", env)
     binary = "v8_shell" if target == "v8-shell" else "headless_shell"
+    cache = (cache_probe.probe(source, logs, env, jobs, run)
+             if target == "headless-shell" else None)
     run([str(depot / "autoninja"), "-C", "out/Reference", "-j", str(jobs), binary],
         source, logs / "compile.log", env)
     if not (out / binary).is_file():
@@ -184,6 +195,7 @@ def build(reference, work, target, logs, delivery, lock, jobs):
                     shutil.copy2(notice, destination)
     provenance = dict(lock, target=target, gn_args=args, resources=copied,
                       build_compatibility=compatibility,
+                      compile_jobs=jobs, concurrent_links=1, modular_cache_probe=cache,
                       binary_sha256=hashlib.sha256((out / binary).read_bytes()).hexdigest())
     (delivery / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     print(json.dumps({"status": "built", "target": target,
