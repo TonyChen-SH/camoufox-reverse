@@ -128,6 +128,14 @@ jobs:
         with:
           path: dist
           key: browser-158-linux-v2-${{ hashFiles('additions/**', 'patches/**', 'baseline.json', 'tools/binding_inventory.py') }}
+      - name: Bundle the local tracing example and license
+        run: |
+          mkdir -p dist/examples
+          cp -R examples/. dist/examples/
+          cp LICENSE dist/LICENSE
+          cd dist
+          sha256sum camoufox-trace-linux-x86_64.tar.zst baseline.json binding-inventory.json \
+            LICENSE examples/* > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: camoufox-trace-candidate-linux-x86_64
@@ -166,7 +174,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            xvfb xauth xdotool x11-xkb-utils libgtk-3-0 libasound2t64 libdbus-glib-1-2 \
+            xvfb xauth xdotool x11-xkb-utils build-essential gnupg iproute2 util-linux \
+            libgtk-3-0 libasound2t64 libdbus-glib-1-2 \
             libx11-xcb1 libxcb-shm0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 \
             libxi6 libxrandr2 libxtst6 libpci3 libegl1 libgl1-mesa-dri zstd
           python -m pip install -r analysis/requirements-mcp.lock -r upstream/ci/requirements.txt
@@ -182,6 +191,8 @@ jobs:
         run: |
           cd dist
           sha256sum --check SHA256SUMS
+          mkdir -p ../evidence
+          cp binding-inventory.json ../evidence/binding-inventory.json
           mkdir -p ../.browser
           zstd -d -c camoufox-trace-linux-x86_64.tar.zst | tar -C ../.browser -xf -
           test -x ../.browser/bin/camoufox-bin
@@ -189,14 +200,14 @@ jobs:
           echo "CAMOUFOX_BINARY=$(realpath ../.browser/bin/camoufox-bin)" >> "$GITHUB_ENV"
       - name: Real browser trace and MCP round trip
         run: xvfb-run -a python tools/runtime_check.py --binary "$CAMOUFOX_BINARY" --output evidence/runtime
-      - name: Upstream checks for affected browser behaviours
+      - name: Complete upstream browser behaviour guards and fingerprint checks
         working-directory: upstream
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          CAMOUFOX_TRACE: '0'
         run: |
-          xvfb-run -a python -m ci.run_patch_guards --binary "$CAMOUFOX_BINARY" --only \
-            context-app-version worker-config-reads webgl-live-state webgl-renderer-pair \
-            audio-matches-stock isolated-evaluate getter-cost-parity debug-logging-off
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          xvfb-run -a python -m ci.run_patch_guards --binary "$CAMOUFOX_BINARY"
           xvfb-run -a python -m ci.run_build_tester --binary "$CAMOUFOX_BINARY"
       - name: Attach runtime validation to the delivery
         run: |
@@ -205,7 +216,7 @@ jobs:
           cp evidence/upstream/build_tester.json dist/build-tester.json
           cd dist
           sha256sum camoufox-trace-linux-x86_64.tar.zst baseline.json binding-inventory.json \
-            runtime-report.json patch-guards.json build-tester.json > SHA256SUMS
+            runtime-report.json patch-guards.json build-tester.json LICENSE examples/* > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: camoufox-trace-linux-x86_64
