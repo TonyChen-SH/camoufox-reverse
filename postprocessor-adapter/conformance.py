@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -31,6 +32,70 @@ COUNTS = {
     "causality_graphml": {"script_causality_graphml": 1}, "flow": {"script_flow": 3},
     "idlapis": {"idlapis": 1}, "adblock": {"adblock": 2}, "fptp": {"thirdpartyfirstparty": 3},
 }
+ELEMENT_FEATURES = [(0, "Document.createElement", 2), (31, "Document.createElement", 1),
+                    (62, "Document.createElement", 1), (93, "Document.createElement", 1),
+                    (124, "Document.createElement", 1), (155, "CustomDocument.createElement", 1)]
+ELEMENT_TAGS = [(0, "div", 2), (31, "span", 1)]
+ELEMENT_SOURCE = "document.createElement('DIV'); document.createElement('SPAN'); document.createElement();"
+
+
+def element_fixture(directory):
+    directory.mkdir()
+    fixtures = ROOT / "postprocessor-adapter/fixtures"
+    provenance = json.loads((fixtures / "firefox158-document-idl.provenance.json").read_text())
+    metadata = fixtures / provenance["projection_file"]
+    assert hashlib.sha256(metadata.read_bytes()).hexdigest() == provenance["projection_sha256"]
+    tree = json.loads(metadata.read_text())
+    assert tree["HTMLDocument"]["parent"] == "Document"
+    assert "createElement" in tree["Document"]["methods"]
+    shutil.copyfile(metadata, directory / "idldata.json")
+    legacy = {"HTMLDocument": {"parent": None, "methods": ["createElement"],
+                                "properties": [], "members": ["createElement"]}}
+    (directory / "legacy-idldata.json").write_text(json.dumps(legacy) + "\n")
+    source = ELEMENT_SOURCE
+    header = ["~0x1", '@"https\\://example.test/index.html":"https\\://example.test"',
+              '$1:"https\\://example.test/main.js":' + source, "!1"]
+    calls = ['c0:%createElement:{1,HTMLDocument}:"DIV"', 'c0:%createElement:{1,HTMLDocument}:"div"',
+             'c31:%createElement:{2,Document}:"SPAN"', 'c62:%createElement:{1,HTMLDocument}',
+             'c93:%createElement:{1,HTMLDocument}:#U', 'c124:%createElement:{1,HTMLDocument}:17',
+             'c155:%createElement:{3,CustomDocument}:"X"']
+    (directory / "vv8-inherited-1-1-main.0.log").write_text("\n".join(header + calls) + "\n")
+    (directory / "vv8-missing-1-1-main.0.log").write_text("\n".join(header + [calls[3]]) + "\n")
+    (directory / "fixture-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+    return source, provenance
+
+
+def element_stdout(binary, output, original):
+    output.mkdir()
+    data = output / "fixture"
+    _, provenance = element_fixture(data)
+    env = dict(os.environ, IDLDATA_FILE=str(data / "idldata.json"))
+    info = oracle.execute([binary, "-aggs", "features+create_element",
+                           data / "vv8-inherited-1-1-main.0.log"], output, output / "inherited", env)
+    assert info["exit_code"] == 0, info
+    rows = oracle.load_rows(output / "inherited.stdout")
+    features = sorted((r[1]["script_offset"], r[1]["feature_name"], r[1]["use_count"])
+                      for r in rows if r[0] == "feature_usage")
+    assert features == ELEMENT_FEATURES, features
+    tags = sorted((r[1]["script_offset"], r[1]["tag_name"], r[1]["create_count"])
+                  for r in rows if r[0] == "create_element")
+    assert all(r[0] in ("feature_usage", "create_element") for r in rows), rows
+    assert tags == ([] if original else ELEMENT_TAGS), tags
+    info.update(status="failed" if original else "passed", checked_features=features, checked_tags=tags)
+    missing_env = dict(env, IDLDATA_FILE=str(data / "legacy-idldata.json"))
+    missing = oracle.execute([binary, "-aggs", "create_element",
+                              data / "vv8-missing-1-1-main.0.log"], output, output / "missing", missing_env)
+    stderr = (output / "missing.stderr").read_text()
+    assert missing["stdout_bytes"] == 0, missing
+    if original:
+        assert missing["exit_code"] == 2 and "index out of range [3] with length 3" in stderr, stderr
+    else:
+        assert missing["exit_code"] == 0 and "panic:" not in stderr, stderr
+    missing["status"] = "failed" if original else "passed"
+    report = dict(status="failed" if original else "passed", profile="original" if original else PROFILE,
+                  fixture=provenance, inherited_document=info, missing_argument=missing)
+    (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+    return report
 
 
 def sql(statement, env):
@@ -156,6 +221,32 @@ def check_pg_values(mode, env, sources):
     return []
 
 
+def postgres_elements(source_root, binary, data, output, env, original):
+    schema = "cfv8_elements_original" if original else "cfv8_elements_repaired"
+    element_env = dict(env, PGOPTIONS="-c search_path=" + schema,
+                       IDLDATA_FILE=str(data / "idldata.json"))
+    sql("CREATE SCHEMA " + schema, env)
+    subprocess.run(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-f",
+                    str(source_root / "post-processor/postgres_schema.sql")],
+                   env=element_env, stdout=subprocess.DEVNULL, check=True)
+    sql("INSERT INTO submissions VALUES ('" + oracle.SUBMISSION + "','https://example.test')", element_env)
+    info = oracle.execute([binary, "-aggs", "features+create_element", "-submissionid", oracle.SUBMISSION,
+                           "-output", "postgresql", data / "vv8-inherited-1-1-main.0.log"],
+                          output, output / "postgres-elements-inherited", element_env)
+    assert info["exit_code"] == 0, info
+    feature_rows = query_rows("feature_usage", "feature_name,script_offset,use_count", element_env)
+    assert sorted((r["script_offset"], r["feature_name"], r["use_count"]) for r in feature_rows) == ELEMENT_FEATURES
+    tag_rows = query_rows("create_elements", "script_offset,tag_name,create_count,security_origin,encode(script_hash,'hex') AS hash", element_env)
+    assert sorted((r["script_offset"], r["tag_name"], r["create_count"]) for r in tag_rows) == ([] if original else ELEMENT_TAGS)
+    expected_hash = hashlib.sha256(ELEMENT_SOURCE.encode()).hexdigest()
+    assert all(r["hash"] == expected_hash and r["security_origin"] == "https://example.test/index.html" for r in tag_rows)
+    report = dict(info, status="failed" if original else "passed",
+        checked_features=feature_rows, checked_tags=tag_rows,
+        table_counts={"feature_usage": len(feature_rows), "create_elements": len(tag_rows)})
+    (output / "postgres-elements-inherited.json").write_text(json.dumps(report, indent=2) + "\n")
+    return report
+
+
 def postgres(adapter_source, binary, data, output, env, sources):
     results = {}
     raw = data / "vv8-reference-1-1-main.0.log"
@@ -194,6 +285,8 @@ def postgres(adapter_source, binary, data, output, env, sources):
     assert first["is_script_third_party_with_root_domain"] is True
     assert first["is_script_third_party_with_first_origin"] is False
     results["fptp_distinct_root"] = dict(info, status="passed", checked_rows=rows)
+    results["create_element_inherited_document"] = postgres_elements(
+        adapter_source, binary, output / "element-regressions/fixture", output, env, False)
     return results
 
 
@@ -235,6 +328,16 @@ def main():
             classification["fptp_values"] = {"status": "expected_upstream_failure", "rows": rows}
         classification["oracle_error_propagation"] = oracle_failures(
             args.original_processor, original_out / "fixture", original_out / "negative-oracles", False)
+        element_stdout(args.original_processor, original_out / "element-regressions", True)
+        classification["create_element"] = {
+            "inherited_document": "expected_upstream_failure",
+            "missing_argument": "expected_upstream_failure",
+            "raw_report": "element-regressions/report.json",
+        }
+        if args.postgres:
+            postgres_elements(args.reference, args.original_processor,
+                original_out / "element-regressions/fixture", original_out, os.environ, True)
+            classification["create_element"]["postgresql_inherited_document"] = "expected_upstream_failure"
         (original_out / "classification.json").write_text(json.dumps(classification, indent=2) + "\n")
         version = lock["commit"] + "+" + PROFILE
         repaired_out = args.output / "repaired"
@@ -258,6 +361,8 @@ def main():
             repaired["stdout"][mode]["status"] = "not_implemented_by_reference_profile"
         repaired["oracle_error_propagation"] = oracle_failures(
             args.adapter_processor, data, repaired_out / "negative-oracles", True)
+        repaired["element_regressions"] = element_stdout(
+            args.adapter_processor, repaired_out / "element-regressions", False)
         if args.postgres:
             repaired["postgresql"] = postgres(args.adapter_source, args.adapter_processor,
                                                data, repaired_out, env, sources)
@@ -266,6 +371,7 @@ def main():
         verify_reference(args.reference, lock)
         summary.update(status="passed_supported_contracts", original_status=classification["status"],
             original_expected_failures=sorted(expected),
+            original_element_failures=classification["create_element"],
             postgres_profile_executed=args.postgres, adapter_version=version,
             original_binary_sha256=hashlib.sha256(args.original_processor.read_bytes()).hexdigest(),
             adapter_binary_sha256=hashlib.sha256(args.adapter_processor.read_bytes()).hexdigest())

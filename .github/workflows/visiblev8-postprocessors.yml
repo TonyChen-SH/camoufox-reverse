@@ -54,6 +54,10 @@ jobs:
           python postprocessor-adapter/repair.py --reference original-visiblev8 --output adapter-evidence/repaired-source
           cp postprocessor-adapter/tests/adblock_test.go adapter-evidence/before-source/post-processor/adblock/adapter_test.go
           cp postprocessor-adapter/tests/adblock_test.go adapter-evidence/repaired-source/post-processor/adblock/adapter_test.go
+          for source in before-source repaired-source; do
+            cp postprocessor-adapter/tests/elements_test.go "adapter-evidence/$source/post-processor/elements/adapter_test.go"
+            cp postprocessor-adapter/fixtures/firefox158-document-idl.json "adapter-evidence/$source/post-processor/elements/adapter-idldata.json"
+          done
       - name: Reproduce original regression failures
         run: |
           cd adapter-evidence/before-source/post-processor
@@ -69,12 +73,25 @@ jobs:
               assert '--- FAIL: ' + name in output, output
           print('Observed all five original regression failures; none counted as passing.')
           PY
+          if go test -vet=off -buildvcs=false -count=1 ./elements > ../../original-element-regressions.log 2>&1; then
+            cat ../../original-element-regressions.log
+            echo 'Original element regressions unexpectedly disappeared.'
+            exit 1
+          fi
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          output = Path('../../original-element-regressions.log').read_text()
+          expected = {'TestInheritedDocumentCreateElement', 'TestMissingCreateElementArgument', 'TestIncompleteNativeCallShape'}
+          assert set(re.findall(r'^--- FAIL: (\w+) ', output, re.MULTILINE)) == expected, output
+          print('Observed the exact inherited-name, missing-argument and incomplete-record failures.')
+          PY
       - name: Test and compile the explicitly repaired adapter
         run: |
           mkdir -p adapter-evidence/bin
           cd adapter-evidence/repaired-source/post-processor
-          go test -race -buildvcs=false -count=1 ./adblock > ../../adapter-regressions.log 2>&1
-          go build -mod=readonly -buildvcs=false -ldflags '-X main.Version=068c617f28686f5c43d27c891803cd21510aa141+camoufox-adapter.1' -o ../../bin/vv8-post-processor-adapter .
+          go test -race -buildvcs=false -count=1 ./adblock ./elements > ../../adapter-regressions.log 2>&1
+          go build -mod=readonly -buildvcs=false -ldflags '-X main.Version=068c617f28686f5c43d27c891803cd21510aa141+camoufox-adapter.2' -o ../../bin/vv8-post-processor-adapter .
       - name: Compile the untouched original and Rust oracle
         run: |
           cd original-visiblev8/post-processor

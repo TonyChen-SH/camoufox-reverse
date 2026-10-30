@@ -1,9 +1,9 @@
 # Separately identified VisibleV8 postprocessor repairs
 
 The original source is fixed at `068c617f28686f5c43d27c891803cd21510aa141`.
-The **camoufox-adapter.1** profile repairs observed defects in that source;
+The **camoufox-adapter.2** profile repairs observed defects in that source;
 it is not presented as an untouched original build. Its binary version is
-`068c617f28686f5c43d27c891803cd21510aa141+camoufox-adapter.1`.
+`068c617f28686f5c43d27c891803cd21510aa141+camoufox-adapter.2`.
 
 The original controlled integration run failed three PostgreSQL modes:
 
@@ -25,9 +25,26 @@ columns and swapped root/first-origin booleans in the `fptp` writer. The repair
 aligns values with the declared columns. An integration case deliberately uses
 a different root domain, so equal booleans cannot hide the mistake.
 
+Actual configured Firefox 158 IDL revealed another defect in both the original
+and adapter.1: `HTMLDocument.createElement` normalizes to its defining interface
+`Document.createElement`, but the element aggregator accepted only the former.
+Adapter.2 accepts the normalized Document name and preserves the legacy
+HTMLDocument fallback. A call without its first argument creates no tag row;
+the generic feature aggregator still records the attempted call. Incomplete
+record shapes return a diagnostic instead of indexing past the fields.
+
+`fixtures/firefox158-document-idl.json` is a verbatim four-interface ancestor
+projection of the actual configured Linux metadata from [the metadata build](https://github.com/TonyChen-SH/camoufox-reverse/pull/11),
+whose complete IDL SHA-256 is recorded in its provenance. The wire records are
+explicitly synthetic. Real original/adapter.1 binaries reproduced both lost
+inherited-name rows and the legacy missing-argument panic. Go regressions and
+stdout/PostgreSQL integration now require `div` at offset 0 with count 2 and
+`span` at offset 31 with count 1, with exact feature-attempt counts and no tags
+invented for missing, undefined, numeric or unrelated calls.
+
 `repair.py` verifies the original Git pin and patch hashes, reads only tracked
 files from that commit and writes a new owned output directory. Exact source
-anchors generate the five source/schema changes. It emits a generated
+anchors generate the six source/schema changes. It emits a generated
 `repairs.patch` and before/after SHA-256 manifest for review; no patch is edited
 by hand. The original checkout remains unchanged. The repaired SQL schema
 includes the missing enum values and standalone `submissions`, `idlapis` and

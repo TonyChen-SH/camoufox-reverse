@@ -13,9 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "reference"))
 from build_visiblev8_reference import LOCK, verify_reference
 
-PROFILE = "camoufox-adapter.1"
+PROFILE = "camoufox-adapter.2"
 PATHS = ("post-processor/features/features.go", "post-processor/causality/causality.go",
          "post-processor/adblock/main.go", "post-processor/fptp/main.go",
+         "post-processor/elements/elements.go",
          "post-processor/postgres_schema.sql")
 
 
@@ -26,6 +27,13 @@ def replace_once(text, before, after):
 
 
 def transform(path, text):
+    if path.endswith("elements/elements.go"):
+        text = replace_once(text,
+            "\t\toffset, err := strconv.Atoi(fields[0])\n",
+            "\t\tif len(fields) < 3 {\n\t\t\treturn fmt.Errorf(\"%d: incomplete native call record\", lineNumber)\n\t\t}\n\t\toffset, err := strconv.Atoi(fields[0])\n")
+        return replace_once(text,
+            '\t\tif fullName == "HTMLDocument.createElement" {\n\t\t\ttagName, ok := core.StripQuotes(fields[3])',
+            '\t\tif fullName == "Document.createElement" || fullName == "HTMLDocument.createElement" {\n\t\t\tif len(fields) < 4 {\n\t\t\t\treturn nil\n\t\t\t}\n\t\t\ttagName, ok := core.StripQuotes(fields[3])')
     if path.endswith("fptp/main.go"):
         return replace_once(text, '''\t\t\tagg.firstPartyProperty.DisplayName,
 \t\t\tscriptProperty.DisplayName,

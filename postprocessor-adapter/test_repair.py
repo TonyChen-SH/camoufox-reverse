@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -6,6 +7,7 @@ import tempfile
 import unittest
 
 import repair
+import conformance
 
 
 class RepairTests(unittest.TestCase):
@@ -40,6 +42,26 @@ class RepairTests(unittest.TestCase):
             for path in repair.PATHS:
                 self.assertEqual((output / path).read_bytes(), (self.reference / path).read_bytes())
             self.assertEqual((output / "repairs.patch").read_text(), "")
+
+    def test_real_document_fixture_and_synthetic_attempts_are_identified(self):
+        fixtures = Path(__file__).resolve().parent / "fixtures"
+        provenance = json.loads((fixtures / "firefox158-document-idl.provenance.json").read_text())
+        self.assertEqual(provenance["source_full_idldata_sha256"],
+                         "a879bbd7f685a3a480f0da7cb183e3061cd81830c84327b808a9e623e24cc7df")
+        metadata = fixtures / provenance["projection_file"]
+        self.assertEqual(hashlib.sha256(metadata.read_bytes()).hexdigest(),
+                         "628128dc040413d7500003acf3984d0d84ede48aeee6b0e7b314d417e72e6cd5")
+        tree = json.loads(metadata.read_text())
+        self.assertEqual(tree["HTMLDocument"]["parent"], "Document")
+        self.assertNotIn("createElement", tree["HTMLDocument"]["methods"])
+        self.assertIn("createElement", tree["Document"]["methods"])
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "fixture"
+            _, actual_provenance = conformance.element_fixture(output)
+            self.assertEqual(actual_provenance, provenance)
+            lines = (output / "vv8-inherited-1-1-main.0.log").read_text().splitlines()
+            self.assertIn("c62:%createElement:{1,HTMLDocument}", lines)
+            self.assertEqual(sum(line.startswith("c") for line in lines), 7)
 
     def test_existing_output_and_unknown_repair_input_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
