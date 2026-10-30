@@ -7,12 +7,16 @@ import hashlib
 import json
 from pathlib import Path
 
+import engine_emit_patch
+import engine_native_patch
+
 ROOT = Path(__file__).resolve().parents[1]
-PATHS = (
+BINDING_PATHS = (
     "dom/bindings/Codegen.py",
     "dom/bindings/BindingUtils.h",
     "dom/bindings/moz.build",
 )
+PATHS = BINDING_PATHS + engine_emit_patch.PATHS + engine_native_patch.PATHS
 
 def git_blob(data):
     return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
@@ -25,6 +29,10 @@ def replace_once(text, old, new):
 
 
 def transform(path, data):
+    if path in engine_emit_patch.PATHS:
+        return engine_emit_patch.transform(path, data)
+    if path in engine_native_patch.PATHS:
+        return engine_native_patch.transform(path, data)
     text = data.decode("utf-8")
     if path.endswith("Codegen.py"):
         hook = '''        # Per-property forwarding entries retain template member names.

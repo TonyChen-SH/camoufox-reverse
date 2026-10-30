@@ -13,6 +13,7 @@ from generate_patch import PATHS, ROOT, git_blob
 
 
 def replace_file(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as temporary:
         staging = Path(temporary.name)
         try:

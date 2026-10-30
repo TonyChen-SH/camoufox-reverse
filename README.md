@@ -2,6 +2,8 @@
 
 把浏览器 WebIDL 绑定的执行定位到 **脚本 URL、行列、参数与返回值摘要、可选调用栈**，用于排查兼容性和指纹不一致。配套分析器：[camoufox-reverse-mcp](https://github.com/TonyChen-SH/camoufox-reverse-mcp)。
 
+新增独立的 SpiderMonkey 引擎通道：捕获宿主属性查询、方法引用、读写、native 调用/构造、eval 与完整脚本来源，并可导出标准 VisibleV8 日志。功能和实际验证边界见 [引擎事件兼容说明](docs/visiblev8.md)。现有已验证 WebIDL 包不等同于新增引擎包；新增功能须通过独立浏览器门禁。
+
 通用版本已移除原来的 16 名称白名单，覆盖生成的实例/静态 getter、setter、方法及构造入口。Linux x86_64 完整源码编译已通过；实际生成清单包含 **1,030 个接口、9,884 个不同 API 名、12,852 个操作入口**。这是实验性 WebIDL 监控，Windows/macOS 尚未构建验证。
 
 ## 下载与使用

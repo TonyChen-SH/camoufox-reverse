@@ -167,7 +167,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: TonyChen-SH/camoufox-reverse-mcp
-          ref: 46b76bfd287154031677df033047f18acb50e7e7
+          ref: df2ce2f8cd631ad920409e79156e8d0f51837fca
           path: analysis
           persist-credentials: false
       - name: Install runtime and SDK prerequisites
@@ -200,6 +200,8 @@ jobs:
           echo "CAMOUFOX_BINARY=$(realpath ../.browser/bin/camoufox-bin)" >> "$GITHUB_ENV"
       - name: Real browser trace and MCP round trip
         run: xvfb-run -a python tools/runtime_check.py --binary "$CAMOUFOX_BINARY" --output evidence/runtime
+      - name: Engine operations, complete source and seven-tool MCP conformance
+        run: xvfb-run -a python tools/engine_runtime_check.py --binary "$CAMOUFOX_BINARY" --output evidence/engine
       - name: Complete upstream browser behaviour guards and fingerprint checks
         working-directory: upstream
         env:
@@ -212,14 +214,15 @@ jobs:
       - name: Attach runtime validation to the delivery
         run: |
           cp evidence/runtime/runtime-report.json dist/runtime-report.json
+          cp evidence/engine/engine-runtime-report.json dist/engine-runtime-report.json
           cp evidence/upstream/patch_guards.json dist/patch-guards.json
           cp evidence/upstream/build_tester.json dist/build-tester.json
           cd dist
           sha256sum camoufox-trace-linux-x86_64.tar.zst baseline.json binding-inventory.json \
-            runtime-report.json patch-guards.json build-tester.json LICENSE examples/* > SHA256SUMS
+            runtime-report.json engine-runtime-report.json patch-guards.json build-tester.json LICENSE examples/* > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: camoufox-trace-linux-x86_64
+          name: camoufox-engine-trace-linux-x86_64
           path: dist/
           if-no-files-found: error
           retention-days: 14

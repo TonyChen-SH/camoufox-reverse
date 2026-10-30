@@ -23,12 +23,79 @@
     "dom/bindings/moz.build": {
       "before": "9a13472f2e3c422da0a0c63cbb068907500ee2d1",
       "after": "3b3de7dbf9560c5c2b097ffd9310cb1519d40938"
+    },
+    "js/src/frontend/BytecodeEmitter.h": {
+      "before": "6e3a4d21f48298f40f70cce9243b7e049e9bd99b",
+      "after": "5071f77dc1759ee424f58ad893f7b6bd70cb39a4"
+    },
+    "js/src/frontend/BytecodeEmitter.cpp": {
+      "before": "c33faa1ee2613a18544adc3a4b1a659b8edbf2eb",
+      "after": "205501d274e3ae791fc40623ed444d7ef95086b4"
+    },
+    "js/src/vm/SelfHosting.cpp": {
+      "before": "84c4d2546d38434ef4d820d94a16283c9f96c659",
+      "after": "9bf0ed877a0767112687958b6f9e381d963d0e89"
+    },
+    "js/src/builtin/Reflect.cpp": {
+      "before": "cd6a15b8b0ecead5d2f8b2b59692508653a244aa",
+      "after": "3c8194de44f0d87239c3e28082dbac9c1c3d91bf"
+    },
+    "js/src/builtin/Reflect.js": {
+      "before": "34ca34af606718357078f6d70a7fa76ea8bb22a9",
+      "after": "073690b1a18e3a98fa5d792ea62fd4cfad8ad12e"
+    },
+    "js/src/frontend/StencilXdr.cpp": {
+      "before": "232b821798249e6633e25decdab97b9ffe820f78",
+      "after": "42ad9d8425f30854d815cfc35729a51d23d1ef0e"
+    },
+    "js/public/CallAndConstruct.h": {
+      "before": "2a39552f6d37a0ef77640b4ec7d4ee192aebdba3",
+      "after": "1d79025ab0da9722c723215ecea56f790206d8c0"
+    },
+    "js/src/moz.build": {
+      "before": "81a49f76945aa18460af904313bd5221acc53ed2",
+      "after": "d7f2bcf29b742b96a259895089a1e7c4d6fece94"
+    },
+    "dom/bindings/BindingUtils.cpp": {
+      "before": "6cbfbceb534aa4dd1b7ef868f96aa87c334ada05",
+      "after": "b2014b9c615c0179116f5050da0dfff97ea1c54b"
+    },
+    "js/src/vm/Interpreter.cpp": {
+      "before": "940e584794d8448ed9b53848f864bd07d16e5f3a",
+      "after": "34f5cae8f17c22acbb2a62e9182c86491ab710a8"
+    },
+    "js/src/jit/CacheIR.cpp": {
+      "before": "a0c9122e280a69b60638bd8e91ecbd8a84bdb5a6",
+      "after": "5f854527fbae906e452cd1d3ccb468d33c828c0d"
+    },
+    "js/src/jit/CodeGenerator.cpp": {
+      "before": "37350f8451c57b5d0ef25435b235b46672eb9995",
+      "after": "f60eba543a349132b4432fbbfed38eeb578f4ace"
+    },
+    "js/src/builtin/Eval.cpp": {
+      "before": "204f93d40e73a9fd5235f412fbb3d05a36ad0830",
+      "after": "358a23788e086e36ab450485cd6f63d830881707"
+    },
+    "js/src/vm/JSFunction.cpp": {
+      "before": "545b5080029982981ba70fa25f6790ab98216b10",
+      "after": "360beb0dfeb21de2db7b7ddde99044213ada7f04"
+    },
+    "js/src/proxy/Proxy.cpp": {
+      "before": "aad9e45fcf8d4316faef926cdee08b67cb898d3e",
+      "after": "74c2484bf3dcef029b68f06fa19c45c0bf4227c1"
+    },
+    "xpcom/base/CycleCollectedJSRuntime.cpp": {
+      "before": "f4858b8e65e0961ffa8bd075a9b02fd17bacde4a",
+      "after": "7fde08c335682d870579628b1d06b0f71bbdf063"
     }
   },
   "additions": {
-    "dom/bindings/CamoufoxTrace.cpp": "33ff829eb9f9d3459a732d26478ec0d426496278d58d3ca360dd226fe1ae0939",
+    "dom/bindings/CamoufoxTrace.cpp": "4c33ced9cc1170e09f0f01151e2b9c207cb7d7e30e142844e0bbd1d0a70d92a2",
     "dom/bindings/CamoufoxTrace.h": "a932148b22b80ad39d52a044644e41acec12e269965eb9951acc20cec6325244",
-    "dom/bindings/CamoufoxTraceBuffer.h": "926b25c11fa4c8708f85442bc5a10ed4de8b2752e128e5e58e944cd22bd7ade9"
+    "js/public/experimental/CamoufoxTraceBuffer.h": "926b25c11fa4c8708f85442bc5a10ed4de8b2752e128e5e58e944cd22bd7ade9",
+    "js/src/vm/CamoufoxMonitor.cpp": "a98009d81807570216c9cba826bc66a547f7674869ad79e829e9218f1c7fd1f9",
+    "js/src/vm/CamoufoxMonitor.h": "9e4d664e6de919e13b3f3daa86b3866f456d6e1d731edeecc08c7394c41a524d",
+    "js/src/vm/CamoufoxMonitorBuffer.h": "d35276d2f9aa33c4d3f4fbea81b105ce90a3f2496fa2ae050c9404116ee0b473"
   },
   "coverage": {
     "kind": "webidl-bindings",
@@ -52,5 +119,18 @@
       "Privileged system realms and native calls without a scripted caller are excluded"
     ]
   },
-  "patch_sha256": "c2e47bb84ed6cd92568b3988ee6af2618d2a4c0fd6ec0e1b499112664904d74c"
+  "patch_sha256": "d74f42c2d2712665202712cb41767b281e107dda7c85811363cf0c61044c2f75",
+  "engine": {
+    "reference": {
+      "repository": "https://github.com/wspr-ncsu/visiblev8",
+      "commit": "068c617f28686f5c43d27c891803cd21510aa141",
+      "chromium": "155.0.8059.30"
+    },
+    "enabled_by": "CAMOUFOX_ENGINE_TRACE=1",
+    "wire_format": "VisibleV8 ASCII in schema-1 vv8 transport fragments",
+    "property_filter": "global, registered DOM prototype classes, native DOM objects and native DOM/window proxies",
+    "default_system_realms": "exclude current system realm; callers are not a separate permission filter",
+    "native_boundary": "registered embedding JSNative pointers; explicit eval/dynamic Function hooks",
+    "status": "experimental"
+  }
 }
