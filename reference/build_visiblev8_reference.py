@@ -31,6 +31,23 @@ def head(path):
                                    text=True).strip()
 
 
+def bootstrap_depot(depot, logs, env, revision):
+    if head(depot) != revision:
+        raise ValueError("Refusing to bootstrap a different depot_tools revision")
+    bootstrap_env = dict(env, DEPOT_TOOLS_DIR=str(depot), DEPOT_TOOLS_UPDATE="0",
+                         DEPOT_TOOLS_BOOTSTRAP_PYTHON3="1")
+    # The pinned provider explicitly bootstraps without updating its Git checkout.
+    # gclient does not provision python-bin when DEPOT_TOOLS_UPDATE is disabled.
+    run([str(depot / "ensure_bootstrap")], depot, logs / "depot-bootstrap.log", bootstrap_env)
+    if head(depot) != revision:
+        raise ValueError("depot_tools changed revision during bootstrap")
+    marker = depot / "python3_bin_reldir.txt"
+    if not marker.is_file() or not marker.read_text().strip():
+        raise ValueError("Pinned depot_tools bootstrap did not provision its Python runtime")
+    run([str(depot / "python-bin/python3"), "--version"], depot,
+        logs / "depot-python.log", bootstrap_env)
+
+
 def verify_reference(reference, lock):
     if head(reference) != lock["commit"]:
         raise ValueError("VisibleV8 checkout differs from the immutable reference")
@@ -73,6 +90,7 @@ def prepare(reference, work, target, logs, lock):
     env = os.environ.copy()
     env.update(DEPOT_TOOLS_UPDATE="0", DEPOT_TOOLS_WIN_TOOLCHAIN="0")
     env["PATH"] = str(depot) + os.pathsep + env["PATH"]
+    bootstrap_depot(depot, logs, env, lock["depot_tools_commit"])
     name = "v8" if target == "v8-shell" else "src"
     repository = "v8/v8" if target == "v8-shell" else "chromium/src"
     revision = lock["v8_commit"] if target == "v8-shell" else lock["chromium_commit"]
@@ -114,6 +132,7 @@ def build(reference, work, target, logs, delivery, lock, jobs):
     env = os.environ.copy()
     env.update(DEPOT_TOOLS_UPDATE="0", DEPOT_TOOLS_WIN_TOOLCHAIN="0")
     env["PATH"] = str(depot) + os.pathsep + env["PATH"]
+    bootstrap_depot(depot, logs, env, lock["depot_tools_commit"])
     args = ["is_debug=false", "dcheck_always_on=false", "symbol_level=0",
             "is_component_build=false", "use_remoteexec=false", "use_siso=false",
             'cc_wrapper="ccache"',

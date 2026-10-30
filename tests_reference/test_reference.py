@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -64,6 +66,47 @@ class ReferenceContractTests(unittest.TestCase):
                 builder.prepare(self.reference, directory, "v8-shell", directory, self.lock)
             self.assertEqual(hashlib.sha256(sentinel.read_bytes()).hexdigest(), before)
             self.assertEqual(sorted(p.name for p in directory.iterdir()), ["user-data"])
+
+    def test_pinned_bootstrap_makes_the_real_python_wrapper_usable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            depot = Path(temporary) / "depot_tools"
+            depot.mkdir()
+            logs = Path(temporary) / "logs"
+            logs.mkdir()
+            wrapper = depot / "python-bin/python3"
+            wrapper.parent.mkdir()
+            source = ROOT / "reference/fixtures/depot_python3"
+            data = source.read_bytes()
+            self.assertEqual(hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest(),
+                             "33016e32126b83518243094d3c40183f786214d7")
+            shutil.copyfile(source, wrapper)
+            wrapper.chmod(0o755)
+            failed = subprocess.run([str(wrapper), "--version"], capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("python3_bin_reldir.txt not found", failed.stderr)
+            # This isolated provider fixture stands in for CIPD provisioning.
+            # The production driver must invoke the provider; it never writes its marker.
+            bootstrap = depot / "ensure_bootstrap"
+            bootstrap.write_text("#!/usr/bin/env python3\n"
+                "import os,pathlib,sys\n"
+                "p=pathlib.Path(__file__).parent\n"
+                "assert os.environ['DEPOT_TOOLS_BOOTSTRAP_PYTHON3']=='1'\n"
+                "assert pathlib.Path(os.environ['DEPOT_TOOLS_DIR'])==p\n"
+                "b=p/'fixture-runtime/bin';b.mkdir(parents=True,exist_ok=True)\n"
+                "(b/'python3').symlink_to(sys.executable)\n"
+                "(p/'python3_bin_reldir.txt').write_text('fixture-runtime/bin\\n')\n")
+            bootstrap.chmod(0o755)
+            subprocess.run(["git", "init", "-q", str(depot)], check=True)
+            subprocess.run(["git", "-C", str(depot), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(depot), "-c", "user.name=Fixture",
+                            "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+            revision = builder.head(depot)
+            environment = dict(os.environ, DEPOT_TOOLS_UPDATE="0", DEPOT_TOOLS_BOOTSTRAP_PYTHON3="0")
+            builder.bootstrap_depot(depot, logs, environment, revision)
+            usable = subprocess.run([str(wrapper), "--version"], capture_output=True, text=True)
+            self.assertEqual(usable.returncode, 0)
+            self.assertTrue(usable.stdout.startswith("Python "))
+            self.assertEqual(builder.head(depot), revision)
 
 
 if __name__ == "__main__":

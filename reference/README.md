@@ -48,6 +48,15 @@ browser. A work directory is marked with the selected profile; the driver
 refuses unrelated nonempty directories. `--phase prepare` and `--phase build`
 allow compiler cache restoration between dependency setup and compilation.
 
+Both source phases invoke the pinned depot_tools `ensure_bootstrap` entry point
+with self-updates disabled and verify that its Git revision remains unchanged.
+The provider must create its own Python-runtime marker and its real
+`python-bin/python3 --version` command must succeed. Merely running gclient
+with `DEPOT_TOOLS_UPDATE=0` does not establish that prerequisite. The test-only
+`fixtures/depot_python3` is the unmodified wrapper from this exact tools pin,
+Git blob `33016e32126b83518243094d3c40183f786214d7`; its upstream notice is
+retained in `fixtures/LICENSE.depot_tools`.
+
 The original shell goldens contain literal `/testsrc` filenames, including an
 eval fixture that reads `/testsrc/fred.txt`. The CI runner creates that symlink;
 the shell checker refuses an absent or mismatched link rather than rewriting
