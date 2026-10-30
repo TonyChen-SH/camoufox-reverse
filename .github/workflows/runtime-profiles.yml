@@ -1,0 +1,74 @@
+name: Native Fission and Ion profiles
+on:
+  pull_request:
+    paths:
+      - 'runtime-profiles/**'
+      - '.github/workflows/runtime-profiles.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: native-profiles-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-profile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [fission, ion]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/checkout@v4
+        with:
+          repository: TonyChen-SH/camoufox-reverse-mcp
+          ref: 31f6cad2a55e2f9049987f1ea92e4f1fc305abb5
+          path: analysis
+          persist-credentials: false
+      - name: Install runtime and actual SDK prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth libgtk-3-0 libasound2t64 libdbus-glib-1-2 \
+            libx11-xcb1 libxcb-shm0 libxcomposite1 libxcursor1 libxdamage1 \
+            libxfixes3 libxi6 libxrandr2 libxtst6 libpci3 libegl1 libgl1-mesa-dri zstd
+          python -m pip install -r analysis/requirements-mcp.lock
+          python -m pip install --no-deps -e analysis
+          python -m pip install 'playwright==1.62.0'
+      - name: Download the exact source-availability browser candidate
+        uses: actions/download-artifact@v4
+        with:
+          repository: TonyChen-SH/camoufox-reverse
+          run-id: 41064733272
+          github-token: ${{ github.token }}
+          name: camoufox-trace-candidate-linux-x86_64
+          path: dist
+      - name: Verify the package and immutable source baseline
+        run: |
+          cd dist
+          sha256sum --check SHA256SUMS
+          cmp baseline.json ../baseline.json
+          mkdir -p ../.browser ../evidence
+          zstd -d -c camoufox-trace-linux-x86_64.tar.zst | tar -C ../.browser -xf -
+          test -x ../.browser/bin/camoufox-bin
+          test -z "$(find ../.browser -xtype l -print -quit)"
+          cp baseline.json SHA256SUMS ../evidence/
+          echo "CAMOUFOX_BINARY=$(realpath ../.browser/bin/camoufox-bin)" >> "$GITHUB_ENV"
+      - name: Verify evidence rejection cases
+        run: python -m unittest discover -s runtime-profiles -p 'test_*.py' -v
+      - name: Require actual native profile evidence
+        run: xvfb-run -a python runtime-profiles/${{ matrix.profile }}.py --binary "$CAMOUFOX_BINARY" --output evidence/${{ matrix.profile }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-${{ matrix.profile }}-profile-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
