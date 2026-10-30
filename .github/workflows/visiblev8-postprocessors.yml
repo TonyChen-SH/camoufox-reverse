@@ -1,0 +1,119 @@
+name: VisibleV8 repaired postprocessors
+on:
+  pull_request:
+    paths:
+      - 'postprocessor-adapter/**'
+      - '.github/workflows/visiblev8-postprocessors.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: visiblev8-postprocessors-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  original-and-repaired:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: wspr-ncsu/visiblev8
+          ref: 068c617f28686f5c43d27c891803cd21510aa141
+          path: original-visiblev8
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: postgres/postgres
+          ref: 1f47e7b59b92c58eee6840325d1aaa6acee84194
+          path: postgres-source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: original-visiblev8/post-processor/go.sum
+      - name: Install fixed build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bison flex build-essential pkg-config libssl-dev
+          rustup toolchain install 1.86.0 --profile minimal
+      - name: Check the generator and original source boundaries
+        env:
+          VISIBLEV8_REFERENCE_SOURCE: original-visiblev8
+        run: |
+          python -m unittest discover -s postprocessor-adapter -p test_repair.py -v
+          python -m unittest discover -s tests_reference -v
+      - name: Create separate original and repaired owned sources
+        run: |
+          python postprocessor-adapter/repair.py --reference original-visiblev8 --output adapter-evidence/before-source --pristine-copy
+          python postprocessor-adapter/repair.py --reference original-visiblev8 --output adapter-evidence/repaired-source
+          cp postprocessor-adapter/tests/adblock_test.go adapter-evidence/before-source/post-processor/adblock/adapter_test.go
+          cp postprocessor-adapter/tests/adblock_test.go adapter-evidence/repaired-source/post-processor/adblock/adapter_test.go
+      - name: Reproduce original regression failures
+        run: |
+          cd adapter-evidence/before-source/post-processor
+          if go test -vet=off -buildvcs=false -count=1 ./adblock > ../../original-regressions.log 2>&1; then
+            cat ../../original-regressions.log
+            echo 'Original regression bugs unexpectedly disappeared.'
+            exit 1
+          fi
+          python - <<'PY'
+          from pathlib import Path
+          output = Path('../../original-regressions.log').read_text()
+          for name in ('TestRejectMissingResult', 'TestPropagateScannerError', 'TestRejectExtraResult', 'TestRejectMissingBlockedField', 'TestPropagateOracleExit'):
+              assert '--- FAIL: ' + name in output, output
+          print('Observed all five original regression failures; none counted as passing.')
+          PY
+      - name: Test and compile the explicitly repaired adapter
+        run: |
+          mkdir -p adapter-evidence/bin
+          cd adapter-evidence/repaired-source/post-processor
+          go test -race -buildvcs=false -count=1 ./adblock > ../../adapter-regressions.log 2>&1
+          go build -mod=readonly -buildvcs=false -ldflags '-X main.Version=068c617f28686f5c43d27c891803cd21510aa141+camoufox-adapter.1' -o ../../bin/vv8-post-processor-adapter .
+      - name: Compile the untouched original and Rust oracle
+        run: |
+          cd original-visiblev8/post-processor
+          go build -mod=readonly -buildvcs=false -ldflags '-X main.Version=068c617f28686f5c43d27c891803cd21510aa141' -o ../../adapter-evidence/bin/vv8-post-processor-original .
+          cargo +1.86.0 build --locked --release --manifest-path adblock/adblock-oracle-rs/Cargo.toml
+          cp adblock/adblock-oracle-rs/target/release/adblock-oracle-rs ../../adapter-evidence/bin/adblock
+      - name: Build and start isolated fixed PostgreSQL
+        run: |
+          cd postgres-source
+          ./configure --prefix="$RUNNER_TEMP/visiblev8-pg" --without-readline --without-zlib --without-icu > "$RUNNER_TEMP/pg-configure.log" 2>&1
+          make -j2 > "$RUNNER_TEMP/pg-build.log" 2>&1
+          make install > "$RUNNER_TEMP/pg-install.log" 2>&1
+          "$RUNNER_TEMP/visiblev8-pg/bin/initdb" -D "$RUNNER_TEMP/visiblev8-pg-data" -A trust --encoding=UTF8 --no-locale
+          "$RUNNER_TEMP/visiblev8-pg/bin/pg_ctl" -D "$RUNNER_TEMP/visiblev8-pg-data" -l "$RUNNER_TEMP/pg-server.log" -o '-h 127.0.0.1 -p 55432' start
+          echo "$RUNNER_TEMP/visiblev8-pg/bin" >> "$GITHUB_PATH"
+      - name: Preserve original defects and validate all repaired supported outputs
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '55432'
+          PGUSER: runner
+          PGDATABASE: postgres
+        run: |
+          python postprocessor-adapter/conformance.py --reference original-visiblev8 --adapter-source adapter-evidence/repaired-source --original-processor adapter-evidence/bin/vv8-post-processor-original --adapter-processor adapter-evidence/bin/vv8-post-processor-adapter --adblock adapter-evidence/bin/adblock --postgres --output adapter-evidence/conformance
+      - name: Stop isolated PostgreSQL and retain evidence
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/visiblev8-pg-data/postmaster.pid"; then
+            "$RUNNER_TEMP/visiblev8-pg/bin/pg_ctl" -D "$RUNNER_TEMP/visiblev8-pg-data" stop -m fast
+          fi
+          mkdir -p adapter-evidence/postgres-build
+          for logfile in pg-configure.log pg-build.log pg-install.log pg-server.log; do
+            if test -f "$RUNNER_TEMP/$logfile"; then
+              cp "$RUNNER_TEMP/$logfile" adapter-evidence/postgres-build/
+            fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visiblev8-original-and-repaired-postprocessor-evidence
+          path: adapter-evidence/
+          retention-days: 14
+          if-no-files-found: error
