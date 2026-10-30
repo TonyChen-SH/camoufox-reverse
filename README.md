@@ -2,15 +2,15 @@
 
 把浏览器 WebIDL 绑定的执行定位到 **脚本 URL、行列、参数与返回值摘要、可选调用栈**，用于排查兼容性和指纹不一致。配套分析器：[camoufox-reverse-mcp](https://github.com/TonyChen-SH/camoufox-reverse-mcp)。
 
-新增独立的 SpiderMonkey 引擎通道：捕获宿主属性查询、方法引用、读写、native 调用/构造、eval 与完整脚本来源，并可导出标准 VisibleV8 日志。功能和实际验证边界见 [引擎事件兼容说明](docs/visiblev8.md)。现有已验证 WebIDL 包不等同于新增引擎包；新增功能须通过独立浏览器门禁。
+独立的 SpiderMonkey 引擎通道捕获宿主属性查询、方法引用、读写、native 调用/构造、eval 与完整脚本来源，并可导出标准 VisibleV8 日志。Linux 原生编译、22 项引擎门禁、真实跨进程与 Ion 采样验证已通过。功能和边界见 [引擎事件兼容说明](docs/visiblev8.md)。
 
 通用版本已移除原来的 16 名称白名单，覆盖生成的实例/静态 getter、setter、方法及构造入口。Linux x86_64 完整源码编译已通过；实际生成清单包含 **1,030 个接口、9,884 个不同 API 名、12,852 个操作入口**。这是实验性 WebIDL 监控，Windows/macOS 尚未构建验证。
 
 ## 下载与使用
 
-[下载已验证的 Linux x86_64 安装包](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41001689611/artifacts/12954283249)（约 1.24 GB，需要登录 GitHub）。[本次运行](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41001689611)已通过全部门禁；[小体积验证证据](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41001689611/artifacts/12954542329)含完整入口清单、真实 trace 和运行报告。通用包包含 `binding-inventory.json` 和 `examples/`；旧 16 入口 pilot 包不具备这些内容。
+[下载已验证的 Linux x86_64 引擎安装包](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41064733272/artifacts/12984328007)（约 1.24 GB，需要登录 GitHub）。[本次完整运行](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41064733272)通过五种 WebIDL 模式、22 项引擎检查和全部上游门禁；[小体积验证证据](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41064733272/artifacts/12983923464)含入口清单、真实 trace 与报告。该包同时支持 WebIDL 和引擎通道，包含 `binding-inventory.json` 和 `examples/`。
 
-后续版本在 [Native browser build and runtime](https://github.com/TonyChen-SH/camoufox-reverse/actions/workflows/native-browser.yml) 选择成功运行的 **camoufox-trace-linux-x86_64**。该名称只在全部验证门禁通过后上传。
+后续版本在 [Native browser build and runtime](https://github.com/TonyChen-SH/camoufox-reverse/actions/workflows/native-browser.yml) 选择成功运行的 **camoufox-engine-trace-linux-x86_64**。该名称只在全部核心门禁通过后上传；`candidate` 包仅表示编译完成。
 
 Actions 文件保留 14 天。过期后，仓库所有者可在同一工作流选择 **Run workflow** 重新构建与验证。
 
@@ -39,6 +39,8 @@ CAMOUFOX_TRACE=1 CAMOUFOX_TRACE_STACK=1 ./bin/camoufox-bin \
 
 `capture.log` 中应有 `CAMOUFOX_TRACE ` 事件；页面显示结果还需与日志核对。实际排查时将网址换为目标页面，并复现被拦截的步骤。静态页面没有执行这些绑定时可能没有事件。
 
+采集宿主操作尝试与完整源码时，使用 `CAMOUFOX_TRACE=0 CAMOUFOX_ENGINE_TRACE=1` 启动同一浏览器。WebIDL 的返回值/异常摘要与引擎的 `g/s/c/n` 是不同通道；两者可同时启用，分析时须按 `channel` 区分。完整命令见 [引擎采集](docs/visiblev8.md#开启和采集)。
+
 接入现有 Camoufox 自动化脚本时，将 `executable_path` 指向监控版二进制，并按 [分析器采集说明](https://github.com/TonyChen-SH/camoufox-reverse-mcp#采集) 打开 Playwright 浏览器日志转发。无桌面会话可使用现有虚拟显示自动化配置；工作流的 `xvfb-run` 联调脚本提供自动启动与关闭的完整示例。
 
 ## 验证与覆盖数量
@@ -56,15 +58,18 @@ CAMOUFOX_TRACE=1 CAMOUFOX_TRACE_STACK=1 ./bin/camoufox-bin \
 
 清单统计生成入口，不代表每个成员都可从任意网页访问，也不是网站风控规则数。完整条目、文件来源和读写/调用/构造分类见随包 `binding-inventory.json`。
 
-当前检查包括：
+当前验证包括：
 
-- 14 个源码、安装器、生成器、真实 C++ UBSan 序列化和清单测试。
-- 49 个分析器核心测试与 1 个真实 MCP SDK stdio 集成测试。
-- 实际浏览器日志的四工具联调；最终运行带栈模式采集 929 条事件、官方 Python 启动器模式采集 1,724 条事件。35 个必检 API 名和 24 个新增操作组合都存在，覆盖 CSS 独立属性、构造、静态方法、Reflect、Storage call/apply、Promise、WebRTC 和 Worker。
+- 64 个固定源码、安装器、生成器、真实 C++ UBSan 与回归测试，另有 18 个原生 profile 证据、负向与真实 Reader 接口测试。
+- 配套分析器的 88 个核心测试、5 个真实 MCP SDK 测试，以及实际引擎日志的全部七工具联调。
+- 五种 WebIDL 浏览器模式；带栈采集 924 条事件，官方 Python 启动器模式采集 1,715 条事件。35 个必检 API 和 24 个操作组合通过，覆盖 CSS、构造、静态方法、Reflect、Storage call/apply、Promise、WebRTC 和 Worker。
+- 22 项引擎检查，本次采集 11,157 条事件、51 份源码；验证逐次循环计数、源码与 UTF-16 位置、Worker/frame/history/eval，以及标准 raw/manifest/MCP 往返。
 
-[最终运行验证](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41001689611/job/123887611590)通过五种真实浏览器模式（关闭、带栈、事件上限、非法配置、官方 Python 启动器），确定性页面结果开关对照一致，MCP 联调通过。全部 **56/56** 个上游补丁守卫通过；完整 build-tester 在 **8 组配置下通过 1,048/1,048 项检查，等级 A**。
+[完整原生运行](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41064733272/job/124102747169)的关闭/开启页面结果一致。全部 **56/56** 个上游补丁守卫通过；build-tester 在 **8 组配置下通过 1,048/1,048 项计分检查，等级 A**。报告保留其未计入门禁的设备重复与空语音诊断；等级不表示任意网站不会拦截。
 
-工作流每次均执行这些门禁，全部通过才提供验证版安装包。实际结果见 `runtime-report.json`、`patch-guards.json`、`build-tester.json` 和 **native-browser-evidence**；生成入口数与逐项实测数分别报告，不能把仅编译成功当成全部测试通过。
+独立的 [Fission/Ion 原生运行](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41069021017)复用同一候选浏览器：实际主/跨站 PID 为 3630/3681，全部 22 项检查通过；开启监控时三个函数具有真实 Ion 栈采样，80,000 条目标循环事件完整，页面值一致。[运行方法与证据口径](runtime-profiles/README.md)区分实际采样、配置开关与逐事件执行层信息。
+
+核心工作流全部通过后提供验证包；Fission/Ion 证据由独立工作流保存。报告为 `runtime-report.json`、`engine-runtime-report.json`、`patch-guards.json`、`build-tester.json` 及对应 evidence 文件。生成入口数与逐项实测数分别报告；Chromium/V8 参考、后处理器和未运行的平台分别说明，不把这些数量当成网站风控规则数。
 
 ## 版本与范围
 

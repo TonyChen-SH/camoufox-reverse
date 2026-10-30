@@ -4,7 +4,9 @@
 
 ## 开启和采集
 
-原有 WebIDL 通道由 `CAMOUFOX_TRACE=1` 开启；引擎通道独立使用 `CAMOUFOX_ENGINE_TRACE=1`。两者可以同时开启。现有 WebIDL 下载包尚不包含这项新增引擎功能；应使用通过引擎运行门禁的 `camoufox-engine-trace-linux-x86_64` 构建。
+WebIDL 通道由 `CAMOUFOX_TRACE=1` 开启；引擎通道独立使用 `CAMOUFOX_ENGINE_TRACE=1`。两者可以同时开启。[已验证的 Linux 引擎包](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41064733272/artifacts/12984328007)同时支持这两项功能；更早的 WebIDL 专用包不包含引擎通道。
+
+[完整运行](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41064733272)通过 22 项引擎检查、五种 WebIDL 模式、56 个上游守卫及 1,048 项计分检查。另以同一浏览器完成[真实跨进程与 Ion 采样验证](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41069021017)：三个受控函数均有实际采样引用的 Ion frame，80,000 条目标循环事件完整。见[额外 profile](../runtime-profiles/README.md)。这些证据不构成所有 API、所有优化变换或跨平台逐项等价证明。
 
 ```bash
 CAMOUFOX_ENGINE_TRACE=1 python -m camoufox_trace_mcp collect \
