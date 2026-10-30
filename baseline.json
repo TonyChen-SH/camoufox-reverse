@@ -14,7 +14,7 @@
   "files": {
     "dom/bindings/Codegen.py": {
       "before": "9417c3f076288f9a828ec47ec215aa816135799d",
-      "after": "45958a05548989fa60ca14ef89333a7ec58ea2fc"
+      "after": "13173a8a361d105cfd3c133bdcc5c06a9336567a"
     },
     "dom/bindings/BindingUtils.h": {
       "before": "5b7a6a3b9513f359d95a62d19c8080e273797b50",
@@ -26,27 +26,31 @@
     }
   },
   "additions": {
-    "dom/bindings/CamoufoxTrace.cpp": "ca5d888568b4cba76ceb002d7a4d3d2079708442e785a67870ae71eeb0139029",
-    "dom/bindings/CamoufoxTrace.h": "1a0bb1973d01cd346b1f7ba3da940ebd4965ae8ebcb175efcf04e9761b500e88",
+    "dom/bindings/CamoufoxTrace.cpp": "33ff829eb9f9d3459a732d26478ec0d426496278d58d3ca360dd226fe1ae0939",
+    "dom/bindings/CamoufoxTrace.h": "a932148b22b80ad39d52a044644e41acec12e269965eb9951acc20cec6325244",
     "dom/bindings/CamoufoxTraceBuffer.h": "926b25c11fa4c8708f85442bc5a10ed4de8b2752e128e5e58e944cd22bd7ade9"
   },
   "coverage": {
-    "Navigator.userAgent": "get",
-    "Navigator.appVersion": "get",
-    "Navigator.platform": "get",
-    "Navigator.hardwareConcurrency": "get",
-    "WorkerNavigator.userAgent": "get",
-    "WorkerNavigator.appVersion": "get",
-    "WorkerNavigator.platform": "get",
-    "WorkerNavigator.hardwareConcurrency": "get",
-    "Screen.width": "get",
-    "Screen.height": "get",
-    "WebGLRenderingContext.getParameter": "call",
-    "WebGL2RenderingContext.getParameter": "call",
-    "CanvasRenderingContext2D.getImageData": "call",
-    "HTMLCanvasElement.toDataURL": "call",
-    "AudioBuffer.getChannelData": "call",
-    "AudioBuffer.copyFromChannel": "call"
+    "kind": "webidl-bindings",
+    "operations": [
+      "get",
+      "set",
+      "call",
+      "construct"
+    ],
+    "scopes": [
+      "instance",
+      "static",
+      "constructor"
+    ],
+    "inventory": "binding-inventory.json",
+    "caller_filter": "scripted-nonsystem-realm",
+    "limits": [
+      "Generated WebIDL binding entry coverage; not all SpiderMonkey native operations",
+      "Optimized or cached accesses may bypass a binding entry",
+      "DOM proxy named/indexed operations and pure JavaScript operations are not hooked",
+      "Privileged system realms and native calls without a scripted caller are excluded"
+    ]
   },
-  "patch_sha256": "37dcc31ab9fecc85867b5db1d4409945e818f6bf496e4e42de096c687d84d98e"
+  "patch_sha256": "202ada810b948c496ec50ca3829635af854ede239d77927db8e1576acb7d2dd0"
 }

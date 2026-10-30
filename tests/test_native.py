@@ -13,7 +13,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from apply import apply
-from generate_patch import APIS, PATHS, git_blob, render, transform
+from generate_patch import PATHS, git_blob, render, transform
 
 
 class BufferTests(unittest.TestCase):
@@ -104,7 +104,7 @@ class SourceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "escapes"):
                 apply(self.tree)
 
-    def test_codegen_hook_selects_pilot_without_static_or_setter_calls(self):
+    def test_codegen_hook_covers_binding_shapes_without_an_api_allowlist(self):
         updated = transform(PATHS[0], (self.source / PATHS[0]).read_bytes())
         module = ast.parse(updated)
         base = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "CGAbstractMethod")
@@ -112,29 +112,53 @@ class SourceTests(unittest.TestCase):
         namespace = {"indent": lambda text: textwrap.indent(text, "  ")}
         exec(compile(ast.Module(body=[function], type_ignores=[]), "Codegen.py", "exec"), namespace)
 
-        def generate(api, op, static=False):
+        def generate(api, op, static=False, template_common=False):
             interface, name = api.split(".")
             member = NS(identifier=NS(name=name), isStatic=lambda: static)
+            argtype = {"GETTER": "JSJitGetterCallArgs", "SETTER": "JSJitSetterCallArgs",
+                       "METHOD": "const JSJitMethodCallArgs&"}.get(op)
+            args = [NS(name="cx", argType="JSContext*")]
+            if static or op == "CONSTRUCTOR":
+                args += [NS(name="argc", argType="unsigned"), NS(name="vp", argType="JS::Value*")]
+            elif argtype:
+                args += [NS(name="args", argType=argtype)]
             mock = NS(
                 error_reporting_label=lambda: None,
                 _template=lambda: "", _decorators=lambda: "", name="binding",
                 _argstring=lambda _: "JSContext* cx, JSJitGetterCallArgs args",
                 auto_profiler_label=lambda: f"STRING_TEMPLATE_{op}",
                 descriptor=NS(interface=NS(identifier=NS(name=interface))),
+                args=args,
             )
-            if op == "METHOD": mock.method = member
+            if op == "CONSTRUCTOR": mock._ctor = member
+            elif op == "METHOD": mock.method = member
             else: mock.attr = member
+            if template_common:
+                mock.attrNameString = '"shared property template"'
             return namespace["definition_prologue"](mock, False)
 
-        for api, operation in APIS.items():
-            kind = "GETTER" if operation == "get" else "METHOD"
-            with self.subTest(api=api):
+        for api, kind, native in (
+            ("Navigator.language", "GETTER", "AutoTraceGetter"),
+            ("Document.title", "SETTER", "AutoTraceSetter"),
+            ("Storage.setItem", "METHOD", "AutoTraceMethod"),
+            ("FutureInterface.futureMember", "GETTER", "AutoTraceGetter"),
+        ):
+            with self.subTest(api=api, kind=kind):
                 generated = generate(api, kind)
                 self.assertEqual(generated.count("camoufoxTrace("), 1)
-                self.assertIn(f'"{api}"', generated)
-                self.assertNotIn("camoufoxTrace(", generate(api, kind, static=True))
-                self.assertNotIn("camoufoxTrace(", generate(api, "SETTER"))
-        self.assertNotIn("camoufoxTrace(", generate("Navigator.language", "GETTER"))
+                self.assertIn(native, generated)
+                interface, member = api.split(".")
+                self.assertIn(f'"{interface}", "{member}"', generated)
+                if kind != "METHOD":
+                    self.assertNotIn("camoufoxTrace(", generate(api, kind, template_common=True))
+                static = generate(api, kind, static=True)
+                self.assertEqual(static.count("camoufoxTrace("), 1)
+                self.assertIn("AutoTraceNative", static)
+                self.assertIn('"static"', static)
+        constructor = generate("URL.constructor", "CONSTRUCTOR")
+        self.assertEqual(constructor.count("camoufoxTrace("), 1)
+        self.assertIn("AutoTraceNative", constructor)
+        self.assertIn('"construct", "constructor"', constructor)
 
 
 if __name__ == "__main__":

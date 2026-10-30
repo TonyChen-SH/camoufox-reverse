@@ -13,25 +13,6 @@ PATHS = (
     "dom/bindings/BindingUtils.h",
     "dom/bindings/moz.build",
 )
-APIS = {
-    "Navigator.userAgent": "get",
-    "Navigator.appVersion": "get",
-    "Navigator.platform": "get",
-    "Navigator.hardwareConcurrency": "get",
-    "WorkerNavigator.userAgent": "get",
-    "WorkerNavigator.appVersion": "get",
-    "WorkerNavigator.platform": "get",
-    "WorkerNavigator.hardwareConcurrency": "get",
-    "Screen.width": "get",
-    "Screen.height": "get",
-    "WebGLRenderingContext.getParameter": "call",
-    "WebGL2RenderingContext.getParameter": "call",
-    "CanvasRenderingContext2D.getImageData": "call",
-    "HTMLCanvasElement.toDataURL": "call",
-    "AudioBuffer.getChannelData": "call",
-    "AudioBuffer.copyFromChannel": "call",
-}
-
 
 def git_blob(data):
     return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
@@ -46,24 +27,47 @@ def replace_once(text, old, new):
 def transform(path, data):
     text = data.decode("utf-8")
     if path.endswith("Codegen.py"):
-        getters = tuple(api for api, op in APIS.items() if op == "get")
-        methods = tuple(api for api, op in APIS.items() if op == "call")
-        hook = '''        # Trace only the specialized binding entry, not its generic wrapper.
-        member = getattr(self, "method", None) or getattr(self, "attr", None)
-        if member and profiler_label and not member.isStatic():
-            api = self.descriptor.interface.identifier.name + "." + member.identifier.name
+        hook = '''        # Per-property forwarding entries retain template member names.
+        member = (getattr(self, "method", None) or getattr(self, "attr", None)
+                  or getattr(self, "_ctor", None))
+        if (member and getattr(member, "identifier", None)
+                and not hasattr(self, "attrNameString")):
+            types = {arg.argType for arg in self.args}
+            names = {arg.name for arg in self.args}
             trace_class = None
-            if "STRING_TEMPLATE_GETTER" in profiler_label and api in %s:
+            operation = None
+            if "JSJitGetterCallArgs" in types:
                 trace_class = "AutoTraceGetter"
-            elif "STRING_TEMPLATE_METHOD" in profiler_label and api in %s:
+            elif "JSJitSetterCallArgs" in types:
+                trace_class = "AutoTraceSetter"
+            elif "const JSJitMethodCallArgs&" in types:
                 trace_class = "AutoTraceMethod"
+            elif {"argc", "vp"} <= names:
+                if getattr(self, "_ctor", None):
+                    operation = "construct"
+                elif profiler_label and "STRING_TEMPLATE_GETTER" in profiler_label:
+                    operation = "get"
+                elif profiler_label and "STRING_TEMPLATE_SETTER" in profiler_label:
+                    operation = "set"
+                elif profiler_label and "STRING_TEMPLATE_METHOD" in profiler_label:
+                    operation = "call"
+                if operation:
+                    trace_class = "AutoTraceNative"
             if trace_class:
+                interface = self.descriptor.interface.identifier.name
+                name = member.identifier.name
+                if operation:
+                    scope = "constructor" if operation == "construct" else "static"
+                    arguments = 'argc, vp, "%s", "%s", "%s", "%s"' % (
+                        interface, name, operation, scope)
+                else:
+                    arguments = 'args, "%s", "%s"' % (interface, name)
                 prologue += indent(
-                    'mozilla::camoutrace::%%s camoufoxTrace(cx, args, "%%s");\\n'
-                    %% (trace_class, api)
+                    'mozilla::camoutrace::%s camoufoxTrace(cx, %s);\\n'
+                    % (trace_class, arguments)
                 )
 
-''' % (repr(getters), repr(methods))
+'''
         old = '            prologue += indent(profiler_label) + "\\n"\n\n        return prologue'
         text = replace_once(text, old, old.replace("        return prologue", hook + "        return prologue"))
     elif path.endswith("BindingUtils.h"):

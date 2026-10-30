@@ -1,24 +1,49 @@
 diff --git a/dom/bindings/Codegen.py b/dom/bindings/Codegen.py
 --- a/dom/bindings/Codegen.py
 +++ b/dom/bindings/Codegen.py
-@@ -2006,6 +2006,21 @@
+@@ -2006,6 +2006,46 @@
          profiler_label = self.auto_profiler_label()
          if profiler_label:
              prologue += indent(profiler_label) + "\n"
 +
-+        # Trace only the specialized binding entry, not its generic wrapper.
-+        member = getattr(self, "method", None) or getattr(self, "attr", None)
-+        if member and profiler_label and not member.isStatic():
-+            api = self.descriptor.interface.identifier.name + "." + member.identifier.name
++        # Per-property forwarding entries retain template member names.
++        member = (getattr(self, "method", None) or getattr(self, "attr", None)
++                  or getattr(self, "_ctor", None))
++        if (member and getattr(member, "identifier", None)
++                and not hasattr(self, "attrNameString")):
++            types = {arg.argType for arg in self.args}
++            names = {arg.name for arg in self.args}
 +            trace_class = None
-+            if "STRING_TEMPLATE_GETTER" in profiler_label and api in ('Navigator.userAgent', 'Navigator.appVersion', 'Navigator.platform', 'Navigator.hardwareConcurrency', 'WorkerNavigator.userAgent', 'WorkerNavigator.appVersion', 'WorkerNavigator.platform', 'WorkerNavigator.hardwareConcurrency', 'Screen.width', 'Screen.height'):
++            operation = None
++            if "JSJitGetterCallArgs" in types:
 +                trace_class = "AutoTraceGetter"
-+            elif "STRING_TEMPLATE_METHOD" in profiler_label and api in ('WebGLRenderingContext.getParameter', 'WebGL2RenderingContext.getParameter', 'CanvasRenderingContext2D.getImageData', 'HTMLCanvasElement.toDataURL', 'AudioBuffer.getChannelData', 'AudioBuffer.copyFromChannel'):
++            elif "JSJitSetterCallArgs" in types:
++                trace_class = "AutoTraceSetter"
++            elif "const JSJitMethodCallArgs&" in types:
 +                trace_class = "AutoTraceMethod"
++            elif {"argc", "vp"} <= names:
++                if getattr(self, "_ctor", None):
++                    operation = "construct"
++                elif profiler_label and "STRING_TEMPLATE_GETTER" in profiler_label:
++                    operation = "get"
++                elif profiler_label and "STRING_TEMPLATE_SETTER" in profiler_label:
++                    operation = "set"
++                elif profiler_label and "STRING_TEMPLATE_METHOD" in profiler_label:
++                    operation = "call"
++                if operation:
++                    trace_class = "AutoTraceNative"
 +            if trace_class:
++                interface = self.descriptor.interface.identifier.name
++                name = member.identifier.name
++                if operation:
++                    scope = "constructor" if operation == "construct" else "static"
++                    arguments = 'argc, vp, "%s", "%s", "%s", "%s"' % (
++                        interface, name, operation, scope)
++                else:
++                    arguments = 'args, "%s", "%s"' % (interface, name)
 +                prologue += indent(
-+                    'mozilla::camoutrace::%s camoufoxTrace(cx, args, "%s");\n'
-+                    % (trace_class, api)
++                    'mozilla::camoutrace::%s camoufoxTrace(cx, %s);\n'
++                    % (trace_class, arguments)
 +                )
  
          return prologue

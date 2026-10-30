@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: dist
-          key: browser-158-linux-v1-${{ hashFiles('additions/**', 'patches/**', 'baseline.json') }}
+          key: browser-158-linux-v2-${{ hashFiles('additions/**', 'patches/**', 'baseline.json', 'tools/binding_inventory.py') }}
       - name: Reclaim build space
         if: steps.binary_cache.outputs.cache-hit != 'true'
         uses: AdityaGarg8/remove-unwanted-software@8831c82abf29b34eb2caac48d5f999ecfc0d8eef
@@ -101,6 +101,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          python tools/binding_inventory.py \
+            --root upstream/browser/camoufox-158.0.1-beta.34/obj-x86_64-pc-linux-gnu/dom/bindings \
+            --output dist/binding-inventory.json
           make -C upstream/browser stage-fonts
           src=upstream/browser/camoufox-158.0.1-beta.34/obj-x86_64-pc-linux-gnu/dist/bin
           test -x "$src/camoufox-bin"
@@ -118,13 +121,13 @@ jobs:
           tar -C "$src" --dereference -cf - bin | zstd -3 -T0 -o dist/camoufox-trace-linux-x86_64.tar.zst
           cp baseline.json dist/baseline.json
           cd dist
-          sha256sum camoufox-trace-linux-x86_64.tar.zst > SHA256SUMS
+          sha256sum camoufox-trace-linux-x86_64.tar.zst baseline.json binding-inventory.json > SHA256SUMS
       - name: Cache this exact compiled browser
         if: steps.binary_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: dist
-          key: browser-158-linux-v1-${{ hashFiles('additions/**', 'patches/**', 'baseline.json') }}
+          key: browser-158-linux-v2-${{ hashFiles('additions/**', 'patches/**', 'baseline.json', 'tools/binding_inventory.py') }}
       - uses: actions/upload-artifact@v4
         with:
           name: camoufox-trace-candidate-linux-x86_64
@@ -156,7 +159,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: TonyChen-SH/camoufox-reverse-mcp
-          ref: 8a75443baa3b774882861e149cb7cc13db67bd67
+          ref: 46b76bfd287154031677df033047f18acb50e7e7
           path: analysis
           persist-credentials: false
       - name: Install runtime and SDK prerequisites
@@ -196,7 +199,13 @@ jobs:
             audio-matches-stock isolated-evaluate getter-cost-parity debug-logging-off
           xvfb-run -a python -m ci.run_build_tester --binary "$CAMOUFOX_BINARY"
       - name: Attach runtime validation to the delivery
-        run: cp evidence/runtime/runtime-report.json dist/runtime-report.json
+        run: |
+          cp evidence/runtime/runtime-report.json dist/runtime-report.json
+          cp evidence/upstream/patch_guards.json dist/patch-guards.json
+          cp evidence/upstream/build_tester.json dist/build-tester.json
+          cd dist
+          sha256sum camoufox-trace-linux-x86_64.tar.zst baseline.json binding-inventory.json \
+            runtime-report.json patch-guards.json build-tester.json > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: camoufox-trace-linux-x86_64

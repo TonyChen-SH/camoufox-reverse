@@ -2,7 +2,7 @@
 
 把页面访问浏览器 API 的行为定位到 **脚本 URL、行列、参数和返回值摘要**，用于排查兼容性与指纹不一致。配套分析器：[camoufox-reverse-mcp](https://github.com/TonyChen-SH/camoufox-reverse-mcp)。
 
-**Linux x86_64 监控版已完成完整编译、真实浏览器采集和 MCP 联调，可以下载使用。** 这是覆盖 16 个绑定入口的实验性版本；Windows/macOS 尚未构建验证。
+当前开发版本已从 16 个名称的白名单扩展为通用 WebIDL 绑定插桩，覆盖实例/静态 getter、setter、方法及构造入口，包括模板化属性的独立名称。新版本正在进行完整编译与真实浏览器验证；以下历史安装包与报告仍对应旧 16 入口版本。Windows/macOS 尚未构建验证。
 
 ## 下载与使用
 
@@ -18,7 +18,7 @@ CAMOUFOX_TRACE=1 CAMOUFOX_TRACE_STACK=1 ./bin/camoufox-bin https://example.com 2
 
 需要 `zstd` 和 Firefox 的 Linux 运行依赖。验证环境为 Ubuntu 24.04，安装依赖的完整命令见 [构建工作流](.github/workflows/native-browser.yml)。包内包含浏览器、字体、fontconfig、配置 schema、默认扩展、源码基线和 `runtime-report.json`；浏览器入口为 `bin/camoufox-bin`。在现有 Camoufox 脚本中将 `executable_path` 指向该文件，再按 [分析器的采集说明](https://github.com/TonyChen-SH/camoufox-reverse-mcp#采集) 打开 Playwright 日志转发。
 
-已核对的验证结果：
+旧 16 入口版本已核对的验证结果：
 
 - [完整源码编译与资源打包](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/40875975007/job/123455019436) 成功；后续运行复用相同源码哈希对应的编译产物。
 - [真实浏览器与回归工作流](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/40895409218) 全部成功：页面产生 22 条测试调用，覆盖全部 16 个入口；脚本位置、栈、异常恢复、单次参数转换、Unicode/NUL/百分号、负零、记录上限和官方 Python 启动器均通过。
@@ -31,7 +31,13 @@ CAMOUFOX_TRACE=1 CAMOUFOX_TRACE_STACK=1 ./bin/camoufox-bin https://example.com 2
 
 这是独立补丁工具仓库。固定到 [Camoufox b6205b0](https://github.com/daijro/camoufox/tree/b6205b0ee1e4c2e8e4bb9eb0e084472028a9c6a3)，其 `browser/upstream.sh` 为 Firefox **158.0.1 / beta.34**；Firefox 文件来自 [9378fbc](https://github.com/mozilla-firefox/firefox/tree/9378fbc58660847fbc02c3486a0ecd6049978e25)。这与旧 Camoufox-Reverse 的 152 系列基线不同，也不声称支持所有写着“最新版”的安装包。具体源文件哈希见 [baseline.json](baseline.json)。
 
-首批 16 个绑定入口：
+通用插桩不再按 API 名白名单筛选，覆盖生成器产生的实例 getter/setter/方法、静态 getter/setter/方法以及普通和 HTML 构造入口。模板化属性在独立转发入口记录，避免多个 CSS 属性共用错误名称或重复记录。`Reflect.get/set` 以及 `.call/.apply` 到达这些绑定时也会产生事件。
+
+构建会从实际生成的 C++ 输出 `binding-inventory.json`，列出接口数、API 名数量、按 `(api, op, scope)` 去重的入口数和物理插桩位置数。清单统计生成入口，不表示这些成员在所有页面环境都可访问，也不能当作已逐个运行验证的数量。
+
+日志的 `op` 为 `get`、`set`、`call`、`construct`；`scope` 为 `instance`、`static`、`constructor`。赋值记录写入参数，成功返回摘要为 `undefined`；构造器返回对象类名或异常状态。浏览器特权 system realm 和没有脚本调用者的内部访问被排除。
+
+原 16 个入口保留为运行回归的一部分：
 
 | 接口 | 成员 |
 |---|---|
@@ -84,11 +90,11 @@ python3 -m camoufox_trace_mcp events capture.log --api WebGLRenderingContext.get
 ## 数据边界
 
 - `source` 是 SpiderMonkey 的直接调用位置，列号 **从 1 开始**；找不到调用者时各字段为 null。没有 source map 还原。
-- 没有稳定 frame ID、Worker ID、request ID；`pid` 和 `realm_class` 不能代替这些 ID。
+- 没有稳定 frame ID、Worker ID、request ID；`pid` 和 `realm_class` 不能代替这些 ID。构造器名称为 `Interface.constructor`，旧式工厂保留其 IDL 成员名。
 - 序号在入口分配、事件在退出写出，因此嵌套/并发调用可乱序。`mono_us` 是本机单调时钟微秒，不能当成网站时间线；`duration_us` 包含记录开销。
 - 字符串使用有界 UTF-8 摘要并标记截断；最多 4 个参数。对象只取原生类名，不执行属性读取、代理、序列化或用户转换。Promise 结果、ImageData 像素、Float32Array 内容和 `copyFromChannel` 的输出缓冲区未采集；相同摘要不能证明内容相同。
 - 栈最多 12 层和 512 个编码字节；`stack_status` 区分 disabled/captured/unavailable。每条记录最多 4096 字节，经 stderr 写出；管道被关闭或跨进程传输破损仍可能丢失日志。
-- 这是绑定入口覆盖。JIT 优化、常量/缓存、未覆盖的 API、静态方法、setter、纯 JavaScript 运算和其他进程路径均可能漏过；未关闭 JIT，也未验证各优化层的覆盖率。
+- 这是生成的 WebIDL 绑定入口覆盖。JIT 优化、常量/缓存、DOM proxy 的命名/索引特殊路径、非 WebIDL 的 SpiderMonkey 原生函数、纯 JavaScript 运算和其他进程路径可能绕过入口；未关闭 JIT，也未验证各优化层的覆盖率。它不等同于 VisibleV8 的 V8 引擎插桩。
 - 已通过真实页面的异常抛出、恢复与单次参数转换回归；不代表所有网页路径或高负载场景均已验证。监控本身的时序开销也可能影响页面行为。
 
 ## 开发检查

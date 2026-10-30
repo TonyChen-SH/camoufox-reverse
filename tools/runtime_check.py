@@ -17,6 +17,53 @@ import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 
+PILOT_APIS = {
+    "Navigator.userAgent", "Navigator.appVersion", "Navigator.platform",
+    "Navigator.hardwareConcurrency", "WorkerNavigator.userAgent",
+    "WorkerNavigator.appVersion", "WorkerNavigator.platform",
+    "WorkerNavigator.hardwareConcurrency", "Screen.width", "Screen.height",
+    "WebGLRenderingContext.getParameter", "WebGL2RenderingContext.getParameter",
+    "CanvasRenderingContext2D.getImageData", "HTMLCanvasElement.toDataURL",
+    "AudioBuffer.getChannelData", "AudioBuffer.copyFromChannel",
+}
+GENERIC_ENTRIES = {
+    ("Document.title", "get", "instance"),
+    ("Document.title", "set", "instance"),
+    ("HTMLCanvasElement.width", "get", "instance"),
+    ("HTMLCanvasElement.width", "set", "instance"),
+    ("Element.id", "get", "instance"),
+    ("Element.id", "set", "instance"),
+    ("CSS2Properties.color", "get", "instance"),
+    ("CSS2Properties.color", "set", "instance"),
+    ("CSS2Properties.backgroundColor", "get", "instance"),
+    ("CSS2Properties.backgroundColor", "set", "instance"),
+    ("DOMParser.constructor", "construct", "constructor"),
+    ("DOMParser.parseFromString", "call", "instance"),
+    ("TextEncoder.constructor", "construct", "constructor"),
+    ("TextEncoder.encode", "call", "instance"),
+    ("Blob.constructor", "construct", "constructor"),
+    ("URL.constructor", "construct", "constructor"),
+    ("URL.canParse", "call", "static"),
+    ("URL.createObjectURL", "call", "static"),
+    ("URL.revokeObjectURL", "call", "static"),
+    ("Storage.setItem", "call", "instance"),
+    ("Storage.getItem", "call", "instance"),
+    ("Permissions.query", "call", "instance"),
+    ("RTCPeerConnection.constructor", "construct", "constructor"),
+    ("RTCPeerConnection.close", "call", "instance"),
+}
+GENERIC_OBSERVATIONS = {
+    "directTitle": "trace-title-direct", "reflectSet": True,
+    "reflectedTitle": "trace-title-reflected", "canvasWidth": 17,
+    "elementId": "trace-element", "colors": ["rgb(12, 34, 56)", "rgb(78, 90, 123)"],
+    "parsedText": "parsed-value", "encoding": "utf-8",
+    "encoded": list("中🦊".encode()), "blob": {"size": 7, "type": "text/plain"},
+    "blobProtocol": "blob:", "canParse": True, "constructorException": "TypeError",
+    "pathname": "/changed", "constructorConversions": 1,
+    "storedValue": "stored-value", "permissionPromise": True,
+    "permissionCompleted": True, "peerState": "stable", "peerClosed": "closed",
+}
+
 
 def child(binary, mode, output):
     from playwright.sync_api import sync_playwright
@@ -58,9 +105,14 @@ def child(binary, mode, output):
         with launch() as browser:
             page = browser.new_page()
             page.goto(f"http://127.0.0.1:{server.server_port}/", wait_until="load")
-            page.wait_for_function("document.querySelector('#result').textContent.startsWith('{')",
-                                   timeout=30000)
-            observed = json.loads(page.locator("#result").inner_text())
+            page.wait_for_function("""() => {
+                const text = document.querySelector('#result').textContent;
+                return text.startsWith('{') || text.startsWith('Fixture failed:');
+            }""", timeout=30000)
+            payload = page.locator("#result").inner_text()
+            if payload.startswith("Fixture failed:"):
+                raise AssertionError(payload)
+            observed = json.loads(payload)
             output.write_text(json.dumps(observed, ensure_ascii=True, indent=2) + "\n")
             if observed.get("expectedException") != "IndexSizeError":
                 raise AssertionError(f"Unexpected page exception result: {observed}")
@@ -68,6 +120,8 @@ def child(binary, mode, output):
                 raise AssertionError("Tracing changed exception recovery or argument coercion")
             if observed.get("webgl") == "unavailable" or observed.get("webgl2") == "unavailable":
                 raise RuntimeError("Both WebGL versions are required by this runtime gate")
+            if observed.get("generic") != GENERIC_OBSERVATIONS:
+                raise AssertionError(f"Unexpected generic API observations: {observed.get('generic')}")
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -101,6 +155,14 @@ async def check_mcp(trace_root, expected):
                 for event in pixels.structuredContent["events"]
             ):
                 raise AssertionError("MCP structured events lost the native negative-zero argument")
+            for operation, scope in (("get", "instance"), ("set", "instance"),
+                                     ("call", "static"), ("construct", "constructor")):
+                filtered = await session.call_tool("get_trace_events", {
+                    "path": "stack.jsonl", "op": operation, "scope": scope, "limit": 100})
+                if (filtered.isError or not filtered.structuredContent["matched"]
+                    or any(event["op"] != operation or event.get("scope") != scope
+                           for event in filtered.structuredContent["events"])):
+                    raise AssertionError(f"MCP lost or mixed {scope} {operation} events")
             comparison = await session.call_tool("compare_traces", {
                 "baseline": "off.jsonl", "candidate": "stack.jsonl"})
             if comparison.isError or not comparison.structuredContent["call_site_changes"]:
@@ -141,12 +203,19 @@ def validate(binary, destination):
             if mode == "stack":
                 if summary["integrity"] != "no_known_loss" or "no_producer_metadata" in summary["statuses"]:
                     raise AssertionError(f"Incomplete real browser trace: {summary['statuses']}")
-                expected = set(json.loads((ROOT / "baseline.json").read_text())["coverage"])
                 fixture_events = [event for event in capture.events
-                                  if ((event["source"] or {}).get("url") or "").endswith(("/probe.js", "/worker.js"))]
-                missing = expected - {event["api"] for event in fixture_events}
+                                  if ((event["source"] or {}).get("url") or "").endswith(
+                                      ("/probe.js", "/generic.js", "/worker.js"))]
+                missing = PILOT_APIS - {event["api"] for event in fixture_events}
                 if missing:
                     raise AssertionError(f"Native runtime missed binding entries: {sorted(missing)}")
+                observed_entries = {(event["api"], event["op"], event.get("scope"))
+                                    for event in fixture_events}
+                missing_generic = GENERIC_ENTRIES - observed_entries
+                if missing_generic:
+                    raise AssertionError(f"Native runtime missed generic entries: {sorted(missing_generic)}")
+                if not all(item.get("coverage") == "webidl-bindings" for item in capture.metadata):
+                    raise AssertionError("Producer did not declare generic WebIDL binding coverage")
                 if not any(event["stack"] and "/probe.js" in event["stack"] for event in fixture_events):
                     raise AssertionError("Native JS stacks are missing")
                 if not all(event["source"]["line"] > 0 and event["source"]["column"] > 0
@@ -179,7 +248,39 @@ def validate(binary, destination):
                     matching = [event for event in fixture_events if event["api"] == "Navigator." + name]
                     if not any(event["result"].get("value") == page[name] for event in matching):
                         raise AssertionError(f"Event-time result differs from the page for {name}")
-                report["coverage"] = sorted(expected)
+                constructors = [event for event in fixture_events if event["api"] == "URL.constructor"]
+                if not any(event["threw"] for event in constructors):
+                    raise AssertionError("Native invalid-URL constructor exception was not captured")
+                if not any(not event["threw"] and event["result"].get("type") == "object"
+                           for event in constructors):
+                    raise AssertionError("Native URL constructor recovery/result was not captured")
+                for title in ("trace-title-direct", "trace-title-reflected"):
+                    if not any(event["api"] == "Document.title" and event["op"] == "set"
+                               and event["args"] and event["args"][0].get("value") == title
+                               and event["result"].get("type") == "undefined"
+                               for event in fixture_events):
+                        raise AssertionError(f"Direct/reflected title setter lost its value: {title}")
+                if not any(event["api"] == "Document.title" and event["op"] == "get"
+                           and event["result"].get("value") == "trace-title-reflected"
+                           for event in fixture_events):
+                    raise AssertionError("Reflect.get did not reach the native getter with its result")
+                if not any(event["api"] == "Permissions.query"
+                           and event["result"] == {"type": "object", "class": "Promise"}
+                           for event in fixture_events):
+                    raise AssertionError("Promise-returning native call did not preserve its result summary")
+                worker_entries = {(event["api"], event["op"], event.get("scope"))
+                                  for event in fixture_events
+                                  if event["source"]["url"].endswith("/worker.js")}
+                worker_expected = {
+                    ("TextEncoder.constructor", "construct", "constructor"),
+                    ("TextEncoder.encode", "call", "instance"),
+                    ("URL.canParse", "call", "static"),
+                }
+                if worker_expected - worker_entries:
+                    raise AssertionError(f"Worker missed generic bindings: {sorted(worker_expected - worker_entries)}")
+                report["coverage"] = sorted(PILOT_APIS | {entry[0] for entry in GENERIC_ENTRIES})
+                report["tested_entries"] = [dict(api=api, op=operation, scope=scope)
+                                            for api, operation, scope in sorted(GENERIC_ENTRIES)]
                 report["fixture_events"] = len(fixture_events)
             if mode == "cap":
                 if not any(item.get("reason") == "event_cap" for item in capture.limits):
@@ -192,6 +293,14 @@ def validate(binary, destination):
             if mode == "wrapper":
                 if summary["integrity"] != "no_known_loss" or not capture.events:
                     raise AssertionError("Official Camoufox wrapper did not produce a valid trace")
+        off_page = json.loads((destination / "off-page.json").read_text())
+        stack_page = json.loads((destination / "stack-page.json").read_text())
+        if off_page["generic"] != stack_page["generic"]:
+            raise AssertionError("Enabling tracing changed deterministic generic API results")
+        for key in ("encoding", "encoded", "pathname", "canParse"):
+            if off_page["worker"][key] != stack_page["worker"][key]:
+                raise AssertionError(f"Enabling tracing changed Worker {key}")
+        report["off_on_observations"] = "matched"
         records = [(line, json.loads(line).get("event") == "api")
                    for line in (destination / "stack.jsonl").read_text().splitlines(keepends=True)]
         api_records = iter(line for line, is_api in reversed(records) if is_api)
