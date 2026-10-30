@@ -1,0 +1,122 @@
+name: Firefox IDL inventory export
+
+on:
+  pull_request:
+    paths:
+      - 'metadata/**'
+      - 'tests_metadata/**'
+      - '.github/workflows/firefox-idl-inventory.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firefox-idl-inventory-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_TARGET: linux,x86_64
+      CARGO_BUILD_JOBS: '1'
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      FIREFOX_SOURCE: ${{ github.workspace }}/upstream/browser/camoufox-158.0.1-beta.34
+      FIREFOX_OBJDIR: ${{ github.workspace }}/upstream/browser/camoufox-158.0.1-beta.34/obj-x86_64-pc-linux-gnu
+      MOZCONFIG: ${{ github.workspace }}/upstream/browser/camoufox-158.0.1-beta.34/mozconfig
+      METADATA_OUTPUT: ${{ github.workspace }}/metadata-dist
+      METADATA_EVIDENCE: ${{ github.workspace }}/metadata-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Initialize export evidence
+        run: |
+          mkdir -p "$METADATA_EVIDENCE"
+          git rev-parse HEAD > "$METADATA_EVIDENCE/reverse-commit.txt"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/checkout@v4
+        with:
+          repository: daijro/camoufox
+          ref: b6205b0ee1e4c2e8e4bb9eb0e084472028a9c6a3
+          path: upstream
+          persist-credentials: false
+      - name: Install the native build's preparation prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            aria2 msitools p7zip-full ccache libsqlite3-dev clang-18 lld-18
+          sudo update-alternatives --install /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-18 100
+      - name: Cache the pinned source archive and bootstrap toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.mozbuild
+            upstream/browser/firefox-158.0.1.source.tar.xz
+          key: firefox-idl-bootstrap-linux-158.0.1-b6205b0-py312-v1
+      - name: Prepare complete Camoufox source with the native configuration
+        working-directory: upstream
+        run: |
+          ccache -M 4G
+          python3 -m ci.run_prepare 2>&1 | tee "$METADATA_EVIDENCE/prepare.log"
+      - name: Apply the pinned trace generator
+        run: |
+          python3 tools/apply.py --source "$FIREFOX_SOURCE" \
+            2>&1 | tee "$METADATA_EVIDENCE/apply.log"
+      - name: Configure and generate the export tier
+        working-directory: upstream/browser/camoufox-158.0.1-beta.34
+        run: |
+          ./mach configure 2>&1 | tee "$METADATA_EVIDENCE/configure.log"
+          ./mach build export 2>&1 | tee "$METADATA_EVIDENCE/export.log"
+      - name: Verify extraction against the real Firefox provider
+        run: |
+          python3 -m unittest discover -s tests_metadata -v \
+            > "$METADATA_EVIDENCE/tests.log" 2>&1
+          cat "$METADATA_EVIDENCE/tests.log"
+      - name: Inventory actual generated binding entries
+        run: |
+          python3 tools/binding_inventory.py \
+            --root "$FIREFOX_OBJDIR/dom/bindings" \
+            --output "$METADATA_OUTPUT/binding-inventory.json" \
+            2>&1 | tee "$METADATA_EVIDENCE/bindings.log"
+      - name: Export matching Go IDL metadata
+        working-directory: upstream/browser/camoufox-158.0.1-beta.34
+        run: |
+          ./mach python --virtualenv build "$GITHUB_WORKSPACE/metadata/idl_inventory.py" \
+            --source "$FIREFOX_SOURCE" \
+            --objdir "$FIREFOX_OBJDIR" \
+            --mozconfig "$MOZCONFIG" \
+            --binding-inventory "$METADATA_OUTPUT/binding-inventory.json" \
+            --output "$METADATA_OUTPUT/idldata.json" \
+            2>&1 | tee "$METADATA_EVIDENCE/idldata.log"
+      - name: Recheck and archive complete metadata inputs and generated evidence
+        run: |
+          python3 metadata/package_inventory.py \
+            --source "$FIREFOX_SOURCE" \
+            --objdir "$FIREFOX_OBJDIR" \
+            --mozconfig "$MOZCONFIG" \
+            --upstream "$GITHUB_WORKSPACE/upstream" \
+            --output "$METADATA_OUTPUT" \
+            2>&1 | tee "$METADATA_EVIDENCE/package.log"
+          cd "$METADATA_OUTPUT"
+          sha256sum --check SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firefox-idldata-linux-x86_64
+          path: metadata-dist/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: firefox-idldata-export-evidence
+          path: metadata-evidence/
+          if-no-files-found: error
+          retention-days: 14
