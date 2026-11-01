@@ -158,6 +158,7 @@ struct SourceInfo {
 struct ThreadState {
   uint64_t tid = gNextThread.fetch_add(1);
   uint64_t sequence = 0;
+  uint64_t checkpoint = 0;
   JSRuntime* runtime = nullptr;
   int64_t script = -1;
   std::string origin;
@@ -542,7 +543,10 @@ bool RegisterSource(JSContext* cx, JS::HandleObject current) {
 
 bool Context(JSContext* cx, int64_t* offset) {
   *offset = -1;
-  if (gThread.runtime != cx->runtime()) {
+  // Re-establish context after a lost transport record without inventing it
+  // in the consumer. Existing source registrations keep their original IDs.
+  if (gThread.runtime != cx->runtime() ||
+      gThread.sequence - gThread.checkpoint >= 128) {
     gThread.runtime = cx->runtime();
     gThread.script = -1;
     gThread.origin.clear();
@@ -550,6 +554,7 @@ bool Context(JSContext* cx, int64_t* offset) {
     isolate.Raw("~0x");
     isolate.Unsigned(reinterpret_cast<uintptr_t>(cx->runtime()), 16);
     if (!Emit(isolate.View())) return false;
+    gThread.checkpoint = gThread.sequence;
   }
   Vv8Record origin;
   JS::RootedString href(cx), token(cx);
