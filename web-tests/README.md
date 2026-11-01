@@ -117,8 +117,8 @@ not supply production `siteverify` responses, Enterprise assessments or v3 score
 ## Transport diagnostics and MCP observations
 
 The repair follow-up retains the original failed runs and uses the same verified
-browser. The current workflow validates the session capacity profile using
-`test-key` and `demo-activation` in binding mode. Each
+browser. The current diagnostic workflow captures response metadata for
+`test-key` with tracing off, then runs the controlled response-body regression. Each
 case saves two bounded private byte streams: native stderr before the driver and
 forwarded stderr before collector decoding. Each has a 64 MiB limit, digest,
 byte counts and an explicit completion receipt. A missing, truncated or failed
@@ -156,3 +156,15 @@ table and `observations.csv` provides a spreadsheet export. They distinguish
 page checks, capture integrity and MCP transport success. Comparisons inspect
 observed script URL/hash sets across modes and flag live-script changes or
 missing body hashes, rather than attributing different counts to tracing alone.
+
+## Response body decoding regression
+
+`response_body_probe.py --binary PATH --output DIRECTORY` runs the compiled
+browser against a loopback fixture with a known script hash. It checks identity,
+gzip and stacked gzip/deflate content encoding, cached and uncached responses,
+and same-origin and cross-origin frames. Each case compares cold page, new frame
+and replaced frame execution with the protocol-returned script bytes. Fixed
+observation windows permit background cache work; failures are never retried.
+The report contains only controlled fixture hashes, sizes, header metadata and
+error codes. Tracing stays off and the browser content sandbox remains enabled.
+The HTTP fixture unit test requires loopback socket permission.

@@ -159,7 +159,15 @@ def browser_case(binary, mode, scenario, private, public, profile="baseline"):
         entry = {'request_id': rid(request), 'frame_id': request_frame(request),
                  'url': clean_url(request.url), 't_ms': stamp()}
         try:
-            body = request.response().body()
+            response = request.response()
+            entry['body_diagnostics'] = {'headers': {name: value for name, value in response.headers.items()
+                if name in ('content-encoding', 'content-length', 'content-type', 'cache-control', 'age', 'vary')},
+                'from_service_worker': response.from_service_worker}
+            try:
+                entry['body_diagnostics']['sizes'] = request.sizes()
+            except Exception as diagnostic_error:
+                entry['body_diagnostics']['sizes_error'] = type(diagnostic_error).__name__
+            body = response.body()
             entry.update(sha256=hashlib.sha256(body).hexdigest(), bytes=len(body))
         except Exception as error:
             entry['read_error'] = type(error).__name__
@@ -291,7 +299,7 @@ def safe_page(page):
         result['activation_frame_text_sha256'] = hashlib.sha256(page['activation_frame_text'].encode()).hexdigest()
     result['errors'] = [{'type': e['type'], 'message_sha256': hashlib.sha256(e['message'].encode()).hexdigest()}
                         for e in page.get('errors', [])]
-    result['scripts'] = [{**{k: v for k, v in script.items() if k != 'read_error_message'},
+    result['scripts'] = [{**{k: v for k, v in script.items() if k not in ('read_error_message', 'body_diagnostics')},
         **({'read_error_message_sha256': hashlib.sha256(script['read_error_message'].encode()).hexdigest()}
            if 'read_error_message' in script else {})} for script in page.get('scripts', [])]
     result['page_errors'] = [hashlib.sha256(e.encode()).hexdigest() for e in page.get('page_errors', [])]

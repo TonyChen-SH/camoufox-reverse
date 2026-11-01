@@ -26,6 +26,15 @@ class ObservationContracts(unittest.TestCase):
         self.assertEqual(result['coverage']['google_source_events'], 2)
         self.assertFalse(result['server_risk_cause_confirmed'])
 
+    def test_inherited_receivers_keep_their_observed_names(self):
+        events = [{'api': api, 'op': 'get', 'source': {'url': 'https://www.gstatic.com/recaptcha/a.js'}}
+                  for api in ('HTMLDocument.cookie', 'WorkerNavigator.userAgent', 'PointerEvent.get isTrusted')]
+        report = observations.build_report({'event_count': 3}, events, [])
+        actual = {row['api']: row['category'] for row in report['observations']}
+        self.assertEqual(actual, {'HTMLDocument.cookie': 'storage_and_session',
+                                 'WorkerNavigator.userAgent': 'browser_environment',
+                                 'PointerEvent.get isTrusted': 'interaction_and_focus'})
+
     def test_contexts_and_offsets_are_distinct(self):
         events = [{'api': 'Navigator.language', 'op': 'get', 'pid': p, 'tid': 1,
                    'source_offset': n, 'source': {'url': 'https://www.gstatic.com/recaptcha/a.js'}}

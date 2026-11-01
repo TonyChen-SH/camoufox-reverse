@@ -77,6 +77,21 @@ for _category, _interfaces in CATEGORY_MEMBERS.items():
                 PUBLIC_APIS[f'{_interface}.{_prefix}{_member}'] = _category
 
 
+# Native receiver classes can be more specific than the WebIDL declaration.
+# Preserve that observed receiver while classifying the inherited member.
+INHERITED_RECEIVERS = {
+    'HTMLDocument': ('Document',), 'XMLDocument': ('Document',),
+    'WorkerNavigator': ('Navigator',),
+    'MouseEvent': ('Event',), 'PointerEvent': ('Event', 'MouseEvent'),
+    'KeyboardEvent': ('Event',), 'TouchEvent': ('Event',),
+}
+for _receiver, _bases in INHERITED_RECEIVERS.items():
+    for _base in _bases:
+        for _api, _category in list(PUBLIC_APIS.items()):
+            if _api.startswith(_base + '.'):
+                PUBLIC_APIS[_receiver + _api[len(_base):]] = _category
+
+
 def digest(value):
     return hashlib.sha256(value.encode('utf-8', 'surrogatepass')).hexdigest()
 

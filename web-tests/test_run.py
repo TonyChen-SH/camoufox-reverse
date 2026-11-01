@@ -25,8 +25,9 @@ class Contracts(unittest.TestCase):
     def test_public_error_messages_are_not_exported(self):
         page = {'checks': {'ok': True}, 'errors': [{'type': 'Error', 'message': 'TOKEN'}],
                 'page_errors': ['SECRET'], 'activation_frame_text': 'PRIVATE CHALLENGE TEXT',
-                'scripts': [{'read_error': 'Error', 'read_error_message': 'PRIVATE SIGNED URL'}]}
+                'scripts': [{'read_error': 'Error', 'read_error_message': 'PRIVATE SIGNED URL', 'body_diagnostics': {'headers': {'cache-control': 'PRIVATE HEADER'}}}]}
         result = web.safe_page(page)
+        self.assertNotIn('PRIVATE HEADER', json.dumps(result))
         self.assertNotIn('PRIVATE SIGNED URL', json.dumps(result))
         self.assertNotIn('TOKEN', json.dumps(result))
         self.assertNotIn('SECRET', json.dumps(result))
