@@ -24,8 +24,10 @@ class Contracts(unittest.TestCase):
 
     def test_public_error_messages_are_not_exported(self):
         page = {'checks': {'ok': True}, 'errors': [{'type': 'Error', 'message': 'TOKEN'}],
-                'page_errors': ['SECRET'], 'activation_frame_text': 'PRIVATE CHALLENGE TEXT'}
+                'page_errors': ['SECRET'], 'activation_frame_text': 'PRIVATE CHALLENGE TEXT',
+                'scripts': [{'read_error': 'Error', 'read_error_message': 'PRIVATE SIGNED URL'}]}
         result = web.safe_page(page)
+        self.assertNotIn('PRIVATE SIGNED URL', json.dumps(result))
         self.assertNotIn('TOKEN', json.dumps(result))
         self.assertNotIn('SECRET', json.dumps(result))
         self.assertNotIn('PRIVATE CHALLENGE TEXT', json.dumps(result))
@@ -33,7 +35,7 @@ class Contracts(unittest.TestCase):
 
     def test_current_reader_and_mode_contracts(self):
         collection = {'collector_schema': 1, 'event': 'collection', 'termination': 'normal_exit',
-                      'returncode': 0, 'output_limited': False, 'stderr_drain_incomplete': False}
+                      'returncode': 0, 'output_limited': False, 'stderr_drain_incomplete': False, 'raw_stderr': {'status': 'complete'}}
         records = ['~a', '@"https\\://www.google.com/recaptcha/api2/anchor":"https\\://www.google.com"',
                    '$1:"https\\://www.gstatic.com/recaptcha/test.js":navigator.userAgent;',
                    '!1', 'g0:{1,Navigator}:"userAgent"']
@@ -42,7 +44,7 @@ class Contracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             private, public = root / 'private', root / 'public'
-            web.write_json(private / 'page.json', {'page_checks_passed': True, 'browser_closed': True})
+            web.write_json(private / 'page.json', {'page_checks_passed': True, 'browser_closed': True, 'native_stderr': {'status': 'complete'}})
             trace = private / 'trace.jsonl'
             trace.write_text(json.dumps(collection) + '\n')
             off = web.analyze_case(trace, 'off', 'demo', private, public, collection)
@@ -60,6 +62,17 @@ class Contracts(unittest.TestCase):
             incomplete = web.analyze_case(trace, 'engine', 'demo', private, public, collection)
             self.assertFalse(incomplete['passed'])
             self.assertEqual(incomplete['capture']['integrity'], 'incomplete')
+
+    def test_missing_transport_receipts_cannot_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private, public = root / 'private', root / 'public'
+            web.write_json(private / 'page.json', {'page_checks_passed': True, 'browser_closed': True})
+            trace = private / 'trace.jsonl'
+            collection = {'collector_schema': 1, 'event': 'collection',
+                          'termination': 'normal_exit', 'returncode': 0}
+            trace.write_text(json.dumps(collection) + '\n')
+            self.assertFalse(web.analyze_case(trace, 'off', 'demo', private, public, collection)['passed'])
 
     def test_evidence_encryption_roundtrip_and_plain_archive_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:

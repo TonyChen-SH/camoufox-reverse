@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 MODES = ('off', 'binding', 'engine')
 SCENARIOS = ('demo', 'test-key', 'script-failure')
 ALL_SCENARIOS = SCENARIOS + ('demo-activation',)
+RAW_STDERR_BYTES = 64 * 1024 * 1024
 SOURCE_COMMIT = 'dee8bb66c386e76cfe771c60e80c407d4827ed62'
 HTML = b'''<!doctype html><meta charset="utf-8"><title>reCAPTCHA test-key integration</title>
 <h1>Official reCAPTCHA test-key integration</h1><div id="widget"></div>
@@ -94,6 +95,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def browser_case(binary, mode, scenario, private, public):
+    from native_stderr import create_wrapper, wait_receipt
     from playwright.sync_api import sync_playwright
     environment = os.environ.copy()
     if environment.get('MOZ_DISABLE_CONTENT_SANDBOX'):
@@ -144,6 +146,7 @@ def browser_case(binary, mode, scenario, private, public):
             entry.update(sha256=hashlib.sha256(body).hexdigest(), bytes=len(body))
         except Exception as error:
             entry['read_error'] = type(error).__name__
+            entry['read_error_message'] = str(error)
         result['scripts'].append(entry)
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -151,7 +154,8 @@ def browser_case(binary, mode, scenario, private, public):
     checkpoint()
     try:
         with sync_playwright() as playwright:
-            browser = playwright.firefox.launch(executable_path=str(binary), headless=False,
+            launcher = create_wrapper(binary, private, max_bytes=RAW_STDERR_BYTES)
+            browser = playwright.firefox.launch(executable_path=str(launcher), headless=False,
                 env=environment, timeout=60000)
             result['browser_version'] = browser.version
             context = browser.new_context(no_viewport=True)
@@ -249,6 +253,7 @@ def browser_case(binary, mode, scenario, private, public):
                 checkpoint()
                 context.close()
                 browser.close()
+                result['native_stderr'] = wait_receipt(private, timeout=5)
                 result['browser_closed'] = True
                 checkpoint()
     except Exception as error:
@@ -269,6 +274,9 @@ def safe_page(page):
         result['activation_frame_text_sha256'] = hashlib.sha256(page['activation_frame_text'].encode()).hexdigest()
     result['errors'] = [{'type': e['type'], 'message_sha256': hashlib.sha256(e['message'].encode()).hexdigest()}
                         for e in page.get('errors', [])]
+    result['scripts'] = [{**{k: v for k, v in script.items() if k != 'read_error_message'},
+        **({'read_error_message_sha256': hashlib.sha256(script['read_error_message'].encode()).hexdigest()}
+           if 'read_error_message' in script else {})} for script in page.get('scripts', [])]
     result['page_errors'] = [hashlib.sha256(e.encode()).hexdigest() for e in page.get('page_errors', [])]
     return result
 
@@ -290,11 +298,13 @@ def analyze_case(trace, mode, scenario, private, public, collection):
     passed = (page.get('page_checks_passed', False) and page.get('browser_closed', False)
               and has_channels and not known_loss and collection['termination'] == 'normal_exit'
               and collection['returncode'] == 0
+              and collection.get('raw_stderr', {}).get('status') == 'complete'
+              and page.get('native_stderr', {}).get('status') == 'complete'
               and (mode == 'off' or scenario == 'script-failure' or bool(attributed)))
     scripts = [{'url': clean_url(s.get('url')), 'sha256': s['source_sha256'],
                 'utf16_length': s['utf16_length']} for s in capture.engine.scripts]
     result = {'mode': mode, 'scenario': scenario, 'passed': passed, 'page': safe_page(page),
-        'capture': {k: summary[k] for k in ('integrity', 'statuses', 'event_count', 'binding_event_count', 'engine_event_count', 'input')},
+        'capture': {k: summary[k] for k in ('integrity', 'statuses', 'event_count', 'binding_event_count', 'engine_event_count', 'input', 'first_loss_issue', 'loss_statuses', 'issue_samples')},
         'collection': collection, 'channel_checks_passed': has_channels,
         'google_attributed_events': len(attributed),
         'google_attributed_distinct_apis': len({event['api'] for event in attributed}),
@@ -343,7 +353,7 @@ def matrix(args):
     write_json(args.output / 'report.json', report)
     try:
         for scenario in args.scenarios:
-            for mode in MODES:
+            for mode in args.modes:
                 private = args.private_output / scenario / mode
                 public = args.output / scenario / mode
                 private.mkdir(parents=True)
@@ -355,9 +365,13 @@ def matrix(args):
                 collection = collect([sys.executable, str(Path(__file__).resolve()), '--child',
                     '--binary', str(binary), '--mode', mode, '--scenario', scenario,
                     '--output', str(public.resolve()), '--private-output', str(private.resolve())],
-                    trace, timeout=150, engine=mode == 'engine', binding=mode == 'binding')
+                    trace, timeout=150, engine=mode == 'engine', binding=mode == 'binding',
+                    raw_stderr_path=private / 'forwarded-stderr.bin', max_raw_stderr_bytes=RAW_STDERR_BYTES)
                 try:
                     result = analyze_case(trace, mode, scenario, private, public, collection)
+                    from mcp_observations import analyze_with_mcp
+                    result['mcp'] = analyze_with_mcp(trace, private, public)
+                    result['passed'] = result['passed'] and result['mcp']['passed']
                 except Exception as error:
                     write_json(private / 'analysis-error.json', {'type': type(error).__name__, 'message': str(error)})
                     result = {'mode': mode, 'scenario': scenario, 'passed': False,
@@ -374,7 +388,7 @@ def matrix(args):
                 print(json.dumps({'scenario': scenario, 'mode': mode, 'passed': result['passed'],
                       'page_passed': result['page'].get('page_checks_passed', False),
                       'events': result['capture']['event_count'], 'integrity': result['capture']['integrity']}), flush=True)
-        report['passed'] = len(report['cases']) == len(args.scenarios) * len(MODES) and all(c['passed'] for c in report['cases'])
+        report['passed'] = len(report['cases']) == len(args.scenarios) * len(args.modes) and all(c['passed'] for c in report['cases'])
     finally:
         report['private_evidence'] = encrypt_private(args.private_output, args.recipient, args.output / 'private-evidence.cms')
         report['finished_at'] = datetime.now(timezone.utc).isoformat()
@@ -392,6 +406,7 @@ def main():
     parser.add_argument('--child', action='store_true')
     parser.add_argument('--mode', choices=MODES)
     parser.add_argument('--scenario', choices=ALL_SCENARIOS)
+    parser.add_argument('--modes', nargs='+', choices=MODES, default=MODES)
     parser.add_argument('--scenarios', nargs='+', choices=ALL_SCENARIOS, default=SCENARIOS)
     args = parser.parse_args()
     if args.child:

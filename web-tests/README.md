@@ -15,7 +15,7 @@ artifact without rebuilding the browser:
 | Browser source | `dee8bb66c386e76cfe771c60e80c407d4827ed62` |
 | Artifact ZIP digest | `beeeaccb365a74a0c06e59dfc9c8e6e683047e6425bba99937a816f550b8d52b` |
 | Browser tar.zst SHA-256 | `ec424c65a9d0ecec0343c9df857ed36d97b4ae81a1bce70bc88ea2e87d3746c1` |
-| Analysis source | `31f6cad2a55e2f9049987f1ea92e4f1fc305abb5` |
+| Analysis source | `fabddde3cab06580f308ab9d4ba80a5b47a2895c` |
 | Playwright | `1.62.0` |
 
 Before launch, CI checks GitHub's artifact ID, name, digest, expiration and build
@@ -113,3 +113,24 @@ API activity, fetched script bytes and observed registered source are separate
 measurements. A network error is not automatically a risk rejection, and
 `no_known_loss` is not proof of a complete producer stream tail. This suite does
 not supply production `siteverify` responses, Enterprise assessments or v3 scores.
+
+## Transport diagnostics and MCP observations
+
+The repair follow-up retains the original failed runs and uses the same verified
+browser for `test-key` and `script-failure` in binding and engine modes. Each
+case saves two bounded private byte streams: native stderr before the driver and
+forwarded stderr before collector decoding. Each has a 64 MiB limit, digest,
+byte counts and an explicit completion receipt. A missing, truncated or failed
+receipt fails the case. The native launcher preserves the browser PID, arguments
+and inherited Juggler descriptors; it does not replace the browser binary.
+
+Every case also starts the pinned `camoufox-reverse-mcp` server over MCP stdio,
+requests its summary, and exhausts event and script pagination. Private tool
+receipts preserve full results. `mcp-observations.json` publishes bounded groups
+with counts, script hashes, source locations and observed execution context;
+unknown or dynamic member names are hashed in public output. API categories
+suggest possible signal families, not confirmed server risk rules. There is no
+server-side score or causal attribution. Page and native clocks are not assumed
+to be synchronized. Trace loss remains a failed monitoring gate even when MCP
+pagination succeeds. Script-body read exceptions are retained privately, with
+only their hashes in public evidence.
