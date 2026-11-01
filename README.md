@@ -41,6 +41,8 @@ CAMOUFOX_TRACE=1 CAMOUFOX_TRACE_STACK=1 ./bin/camoufox-bin \
 
 接入现有 Camoufox 自动化脚本时，将 `executable_path` 指向监控版二进制，并按 [分析器采集说明](https://github.com/TonyChen-SH/camoufox-reverse-mcp#采集) 打开 Playwright 浏览器日志转发。无桌面会话可使用现有虚拟显示自动化配置；工作流的 `xvfb-run` 联调脚本提供自动启动与关闭的完整示例。
 
+补丁还让 Juggler 在 Firefox 交付缓存字节码时读取同一缓存项的原始正文，并修正叠加 `Content-Encoding` 的解码顺序；并发与重复读取共享受容量限制的正文。适用范围和验证方式见[响应体读取说明](docs/response-bodies.md)。
+
 ## 验证与覆盖数量
 
 [通用版本完整编译](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/40990481675/job/123851485701) 已通过。清单来自该次实际生成的 C++：

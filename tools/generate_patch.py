@@ -9,6 +9,7 @@ from pathlib import Path
 
 import engine_emit_patch
 import engine_native_patch
+import response_storage_patch
 
 ROOT = Path(__file__).resolve().parents[1]
 BINDING_PATHS = (
@@ -16,7 +17,8 @@ BINDING_PATHS = (
     "dom/bindings/BindingUtils.h",
     "dom/bindings/moz.build",
 )
-PATHS = BINDING_PATHS + engine_emit_patch.PATHS + engine_native_patch.PATHS
+CAMOUFOX_PATHS = ("juggler/NetworkObserver.js",)
+PATHS = BINDING_PATHS + engine_emit_patch.PATHS + engine_native_patch.PATHS + CAMOUFOX_PATHS
 
 def git_blob(data):
     return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
@@ -29,6 +31,8 @@ def replace_once(text, old, new):
 
 
 def transform(path, data):
+    if path in CAMOUFOX_PATHS:
+        return response_storage_patch.transform(data.decode("utf-8"), replace_once).encode("utf-8")
     if path in engine_emit_patch.PATHS:
         return engine_emit_patch.transform(path, data)
     if path in engine_native_patch.PATHS:
