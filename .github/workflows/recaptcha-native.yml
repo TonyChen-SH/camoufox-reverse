@@ -106,7 +106,7 @@ jobs:
           cp baseline.json ../evidence/browser-baseline.json
       - name: Verify the scenario and evidence contracts
         run: python -m unittest discover -s web-tests -p 'test_*.py' -v
-      - name: Capture native and forwarded stderr for the failing scenarios
+      - name: Validate bounded session capacity with native tracing and MCP
         run: |
           xvfb-run -a python web-tests/run.py \
             --binary .browser/bin/camoufox-bin \
@@ -114,7 +114,7 @@ jobs:
             --private-output "$RUNNER_TEMP/recaptcha-private" \
             --recipient web-tests/evidence-recipient.pem \
             --source-baseline dist/baseline.json \
-            --scenarios test-key script-failure --modes binding engine
+            --scenarios test-key demo-activation --modes binding --capture-profile session
       - uses: actions/upload-artifact@v4
         if: always()
         with:

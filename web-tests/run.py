@@ -94,7 +94,21 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def browser_case(binary, mode, scenario, private, public):
+def capture_settings(profile):
+    from camoufox_trace_mcp.reader import MAX_EVENTS, MAX_RECORDS, MAX_INPUT_BYTES
+    from camoufox_trace_mcp.collector import DEFAULT_OUTPUT_BYTES
+    if profile not in ('baseline', 'session'):
+        raise ValueError('Unknown capture profile')
+    return {'profile': profile,
+            'binding_max_events_per_process': 10000 if profile == 'baseline' else MAX_EVENTS,
+            'engine_max_records_per_process': 0 if profile == 'baseline' else MAX_EVENTS,
+            'reader_max_events': MAX_EVENTS, 'reader_max_records': MAX_RECORDS,
+            'reader_max_input_bytes': MAX_INPUT_BYTES,
+            'collector_max_output_bytes': DEFAULT_OUTPUT_BYTES,
+            'raw_stderr_max_bytes_per_layer': RAW_STDERR_BYTES, 'timeout_seconds': 150}
+
+
+def browser_case(binary, mode, scenario, private, public, profile="baseline"):
     from native_stderr import create_wrapper, wait_receipt
     from playwright.sync_api import sync_playwright
     environment = os.environ.copy()
@@ -105,9 +119,12 @@ def browser_case(binary, mode, scenario, private, public):
     for key in ('CAMOUFOX_TRACE_MAX_EVENTS', 'CAMOUFOX_ENGINE_MAX_RECORDS',
                 'CAMOUFOX_ENGINE_PRIVILEGED', 'CAMOUFOX_TRACE_STACK'):
         environment.pop(key, None)
+    budget = capture_settings(profile)
+    environment['CAMOUFOX_TRACE_MAX_EVENTS'] = str(budget['binding_max_events_per_process'])
+    environment['CAMOUFOX_ENGINE_MAX_RECORDS'] = str(budget['engine_max_records_per_process'])
     os.environ['DEBUG'] = 'pw:browser'
     os.environ['DEBUG_COLORS'] = '0'
-    result = {'mode': mode, 'scenario': scenario, 'checks': {}, 'errors': [],
+    result = {'mode': mode, 'scenario': scenario, 'capture_profile': profile, 'checks': {}, 'errors': [],
               'requests': [], 'responses': [], 'failures': [], 'frames': [],
               'scripts': [], 'workers': [], 'actions': [], 'console': [], 'page_errors': []}
     private.mkdir(parents=True, exist_ok=True)
@@ -281,11 +298,12 @@ def safe_page(page):
     return result
 
 
-def analyze_case(trace, mode, scenario, private, public, collection):
+def analyze_case(trace, mode, scenario, private, public, collection, profile="baseline"):
     from camoufox_trace_mcp import read_capture, summarize
-    from camoufox_trace_mcp.reader import MAX_EVENTS, MAX_RECORDS, MAX_INPUT_BYTES
-    from camoufox_trace_mcp.collector import DEFAULT_OUTPUT_BYTES
-    capture = read_capture(trace)
+    budget = capture_settings(profile)
+    capture = read_capture(trace, max_events=budget['reader_max_events'],
+                           max_records=budget['reader_max_records'],
+                           max_input_bytes=budget['reader_max_input_bytes'])
     summary = summarize(capture)
     write_json(private / 'analysis.json', summary)
     page_path = private / 'page.json'
@@ -313,9 +331,7 @@ def analyze_case(trace, mode, scenario, private, public, collection):
         'source_unavailable_count': len(capture.engine.source_unavailable),
         'source_provenance_complete': capture.engine.source_availability()['source_provenance_complete'],
         'trace_sha256': sha256(trace), 'trace_bytes': trace.stat().st_size,
-        'budgets': {'binding_max_events_per_process': 10000, 'engine_max_records_per_process': 0,
-                    'reader_max_events': MAX_EVENTS, 'reader_max_records': MAX_RECORDS,
-                    'reader_max_input_bytes': MAX_INPUT_BYTES, 'collector_max_output_bytes': DEFAULT_OUTPUT_BYTES}}
+        'budgets': budget}
     write_json(public / 'result.json', result)
     return result
 
@@ -349,6 +365,7 @@ def matrix(args):
               'binary_sha256': sha256(binary), 'libxul_sha256': sha256(binary.parent / 'libxul.so'),
               'baseline_sha256': sha256(args.source_baseline), 'display': 'Xvfb, headed Firefox, default packaged configuration',
               'scope': 'Compatibility and observability; public demo load and official v2 test-key integration only',
+              'capture_profile': args.capture_profile, 'budgets': capture_settings(args.capture_profile),
               'cases': []}
     write_json(args.output / 'report.json', report)
     try:
@@ -364,23 +381,33 @@ def matrix(args):
                 os.environ['CAMOUFOX_ENGINE_TRACE'] = '1' if mode == 'engine' else '0'
                 collection = collect([sys.executable, str(Path(__file__).resolve()), '--child',
                     '--binary', str(binary), '--mode', mode, '--scenario', scenario,
-                    '--output', str(public.resolve()), '--private-output', str(private.resolve())],
-                    trace, timeout=150, engine=mode == 'engine', binding=mode == 'binding',
+                    '--output', str(public.resolve()), '--private-output', str(private.resolve()),
+                    '--capture-profile', args.capture_profile],
+                    trace, timeout=report['budgets']['timeout_seconds'],
+                    max_output_bytes=report['budgets']['collector_max_output_bytes'], engine=mode == 'engine', binding=mode == 'binding',
                     raw_stderr_path=private / 'forwarded-stderr.bin', max_raw_stderr_bytes=RAW_STDERR_BYTES)
+                collected_at = time.monotonic()
+                after = resource.getrusage(resource.RUSAGE_CHILDREN)
                 try:
-                    result = analyze_case(trace, mode, scenario, private, public, collection)
-                    from mcp_observations import analyze_with_mcp
-                    result['mcp'] = analyze_with_mcp(trace, private, public)
-                    result['passed'] = result['passed'] and result['mcp']['passed']
+                    result = analyze_case(trace, mode, scenario, private, public, collection, args.capture_profile)
                 except Exception as error:
                     write_json(private / 'analysis-error.json', {'type': type(error).__name__, 'message': str(error)})
                     result = {'mode': mode, 'scenario': scenario, 'passed': False,
                               'page': safe_page(json.loads((private / 'page.json').read_text())) if (private / 'page.json').exists() else {},
                               'capture': {'event_count': None, 'integrity': 'analysis_failed'},
                               'analysis_error_type': type(error).__name__, 'collection': collection}
-                after = resource.getrusage(resource.RUSAGE_CHILDREN)
+                else:
+                    try:
+                        from mcp_observations import analyze_with_mcp
+                        result['mcp'] = analyze_with_mcp(trace, private, public)
+                        result['passed'] = result['passed'] and result['mcp']['passed']
+                    except Exception as error:
+                        write_json(private / 'mcp-error.json', {'type': type(error).__name__, 'message': str(error)})
+                        result['mcp'] = {'passed': False, 'error_type': type(error).__name__}
+                        result['passed'] = False
                 result['process_cpu_seconds'] = (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)
-                result['collection_wall_seconds'] = round(time.monotonic() - started, 3)
+                result['collection_wall_seconds'] = round(collected_at - started, 3)
+                result['analysis_wall_seconds'] = round(time.monotonic() - collected_at, 3)
                 write_json(public / 'result.json', result)
                 report['cases'].append(result)
                 report['native_camoufox_tested'] = any(c['page'].get('browser_version') for c in report['cases'])
@@ -393,6 +420,8 @@ def matrix(args):
         report['private_evidence'] = encrypt_private(args.private_output, args.recipient, args.output / 'private-evidence.cms')
         report['finished_at'] = datetime.now(timezone.utc).isoformat()
         write_json(args.output / 'report.json', report)
+        from render_report import render_report
+        render_report(args.output)
     return 0 if report.get('passed') else 1
 
 
@@ -406,6 +435,7 @@ def main():
     parser.add_argument('--child', action='store_true')
     parser.add_argument('--mode', choices=MODES)
     parser.add_argument('--scenario', choices=ALL_SCENARIOS)
+    parser.add_argument('--capture-profile', choices=('baseline', 'session'), default='baseline')
     parser.add_argument('--modes', nargs='+', choices=MODES, default=MODES)
     parser.add_argument('--scenarios', nargs='+', choices=ALL_SCENARIOS, default=SCENARIOS)
     args = parser.parse_args()
@@ -413,7 +443,7 @@ def main():
         if args.mode is None or args.scenario is None:
             parser.error('child mode requires --mode and --scenario')
         return browser_case(args.binary.resolve(), args.mode, args.scenario,
-                            args.private_output.resolve(), args.output.resolve())
+                            args.private_output.resolve(), args.output.resolve(), args.capture_profile)
     if args.source_baseline is None or args.recipient is None:
         parser.error('matrix requires --source-baseline and --recipient')
     return matrix(args)

@@ -63,6 +63,17 @@ class Contracts(unittest.TestCase):
             self.assertFalse(incomplete['passed'])
             self.assertEqual(incomplete['capture']['integrity'], 'incomplete')
 
+    def test_capture_profiles_declare_consumer_and_producer_limits(self):
+        baseline = web.capture_settings('baseline')
+        session = web.capture_settings('session')
+        self.assertEqual(baseline['binding_max_events_per_process'], 10000)
+        self.assertEqual(session['binding_max_events_per_process'], session['reader_max_events'])
+        self.assertGreaterEqual(session['reader_max_records'], session['engine_max_records_per_process'])
+        self.assertLess(session['collector_max_output_bytes'], session['reader_max_input_bytes'])
+        self.assertGreater(baseline['timeout_seconds'], 0)
+        with self.assertRaises(ValueError):
+            web.capture_settings('unlimited')
+
     def test_missing_transport_receipts_cannot_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -35,9 +35,9 @@ Each scenario runs with tracing OFF, WebIDL binding tracing, and engine tracing:
 3. Interrupt `api.js` on the local integration page to verify that a network
    failure remains visible and does not report the widget as ready.
 
-The default local matrix runs these nine cases. The current workflow uses
-`--scenarios demo-activation` for three additional cases: click the official
-demo checkbox once, then observe the checkbox and visible challenge-frame state
+The default local matrix runs these nine cases. The additional
+`--scenarios demo-activation` scenario clicks the official
+demo checkbox once, then observes the checkbox and visible challenge-frame state
 for up to 20 seconds. It does not select challenge images, switch or solve audio,
 or submit the form. `checkbox_checked` describes client UI only;
 `bframe_visible_unclassified` does not assert that a challenge was solved or
@@ -117,7 +117,8 @@ not supply production `siteverify` responses, Enterprise assessments or v3 score
 ## Transport diagnostics and MCP observations
 
 The repair follow-up retains the original failed runs and uses the same verified
-browser for `test-key` and `script-failure` in binding and engine modes. Each
+browser. The current workflow validates the session capacity profile using
+`test-key` and `demo-activation` in binding mode. Each
 case saves two bounded private byte streams: native stderr before the driver and
 forwarded stderr before collector decoding. Each has a 64 MiB limit, digest,
 byte counts and an explicit completion receipt. A missing, truncated or failed
@@ -134,3 +135,24 @@ server-side score or causal attribution. Page and native clocks are not assumed
 to be synchronized. Trace loss remains a failed monitoring gate even when MCP
 pagination succeeds. Script-body read exceptions are retained privately, with
 only their hashes in public evidence.
+
+## Bounded session profile
+
+`--capture-profile baseline` retains the original per-process producer defaults
+(10,000 binding events, no engine record cap) for reproducing the failed capture.
+`--capture-profile session` uses the declared reader event budget (100,000) as
+both the per-process binding event cap and engine logical-record cap. Both
+profiles retain the 150-second collection deadline, 64 MiB input/raw limits,
+collector space reserved for its final outcome, and 200,000 reader record cap.
+The profile and all effective limits are included in each result.
+
+Producer limits apply per process, while consumer limits apply to the complete
+capture. Concurrent processes or large sources can exhaust the consumer first;
+that remains an explicit failure. The session profile provides a bounded budget
+for longer interactions; it does not repair or relabel previously capped traces.
+
+After the matrix finishes, `report.html` provides a searchable Chinese evidence
+table and `observations.csv` provides a spreadsheet export. They distinguish
+page checks, capture integrity and MCP transport success. Comparisons inspect
+observed script URL/hash sets across modes and flag live-script changes or
+missing body hashes, rather than attributing different counts to tracing alone.
