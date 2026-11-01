@@ -24,10 +24,18 @@ class SourceFetchTests(unittest.TestCase):
 
     def response(self, url, timeout):
         self.assertEqual(timeout, 60)
-        prefix = ("https://raw.githubusercontent.com/mozilla-firefox/firefox/"
-                  + self.manifest["firefox"]["commit"] + "/")
-        self.assertTrue(url.startswith(prefix), url)
-        path = url.removeprefix(prefix)
+        if url.startswith("https://raw.githubusercontent.com/daijro/camoufox/"):
+            prefix = ("https://raw.githubusercontent.com/daijro/camoufox/"
+                      + self.manifest["camoufox"]["commit"] + "/browser/additions/")
+            self.assertTrue(url.startswith(prefix), url)
+            path = url.removeprefix(prefix)
+            self.assertIn(path, fetch_test_source.CAMOUFOX_PATHS)
+        else:
+            prefix = ("https://raw.githubusercontent.com/mozilla-firefox/firefox/"
+                      + self.manifest["firefox"]["commit"] + "/")
+            self.assertTrue(url.startswith(prefix), url)
+            path = url.removeprefix(prefix)
+            self.assertNotIn(path, fetch_test_source.CAMOUFOX_PATHS)
         return io.BytesIO((self.source / path).read_bytes())
 
     def test_fetches_validated_model_sources_without_adding_them_to_the_patch(self):

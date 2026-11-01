@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import urllib.request
 
-from generate_patch import PATHS, ROOT, git_blob
+from generate_patch import CAMOUFOX_PATHS, PATHS, ROOT, git_blob
 
 
 # Unmodified model inputs at Firefox 9378fbc58660847fbc02c3486a0ecd6049978e25.
@@ -40,7 +40,11 @@ def main():
     sources.update(TEST_SOURCE)
     try:
         for path, expected_blob in sources.items():
-            url = f"https://raw.githubusercontent.com/mozilla-firefox/firefox/{commit}/{path}"
+            provider = "camoufox" if path in CAMOUFOX_PATHS else "firefox"
+            upstream_path = f"browser/additions/{path}" if provider == "camoufox" else path
+            repository = manifest[provider]["repository"].removeprefix("https://github.com/")
+            revision = manifest[provider]["commit"]
+            url = f"https://raw.githubusercontent.com/{repository}/{revision}/{upstream_path}"
             with urllib.request.urlopen(url, timeout=60) as response:
                 data = response.read(2_000_001)
             if len(data) > 2_000_000 or git_blob(data) != expected_blob:
@@ -50,7 +54,8 @@ def main():
             target.write_bytes(data)
     except (OSError, ValueError) as error:
         parser.exit(1, f"error: {error}\n")
-    print(f"Verified {len(sources)} source files at Firefox {commit}")
+    print(f"Verified {len(sources)} source files at Firefox {commit} "
+          f"and Camoufox {manifest['camoufox']['commit']}")
 
 
 if __name__ == "__main__":

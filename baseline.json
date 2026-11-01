@@ -103,6 +103,10 @@
     "js/src/frontend/ElemOpEmitter.cpp": {
       "before": "cc4162ec9ecb94e9a766ee27e26f3e57274b6e3a",
       "after": "facb8923b71cce34249e6c8949a1e4e0e58af75c"
+    },
+    "juggler/NetworkObserver.js": {
+      "before": "53a2f81e6cd48bcce3b9f366bb72177702c211cc",
+      "after": "bd5c7ab7aa477c86c6c294a88d7e419288238047"
     }
   },
   "additions": {
@@ -135,7 +139,7 @@
       "Privileged system realms and native calls without a scripted caller are excluded"
     ]
   },
-  "patch_sha256": "9005e22cb0709c4b962574a7ad34f6d97d6e81d905bdcac0bedffe5171c6592a",
+  "patch_sha256": "e8677ffd599ab343f03efbcbbbaa9e784296822d00764cd5b1ccca11819ab56e",
   "engine": {
     "reference": {
       "repository": "https://github.com/wspr-ncsu/visiblev8",
