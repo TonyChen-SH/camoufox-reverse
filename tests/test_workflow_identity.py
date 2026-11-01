@@ -9,6 +9,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WorkflowIdentityTests(unittest.TestCase):
+    def test_checksummed_hidden_example_is_included_in_both_browser_deliveries(self):
+        self.assertTrue((ROOT / 'examples/.gitattributes').is_file())
+        text = (ROOT / '.github/workflows/native-browser.yml').read_text()
+        deliveries = []
+        for step in re.split(r'^      - ', text, flags=re.MULTILINE):
+            if 'uses: actions/upload-artifact@v4' not in step or '          path: dist/\n' not in step:
+                continue
+            deliveries.append(step)
+            self.assertIn('          include-hidden-files: true\n', step)
+        self.assertEqual(len(deliveries), 2)
+
     def test_both_jobs_checkout_the_artifact_head_instead_of_the_pr_merge_commit(self):
         text = (ROOT / ".github/workflows/native-browser.yml").read_text()
         jobs = dict(re.findall(r"^  ([a-zA-Z0-9_-]+):\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",

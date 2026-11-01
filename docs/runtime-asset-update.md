@@ -100,6 +100,11 @@ compiled core hashes and generated asset against the receipt and target
 baseline. All existing binding, engine, upstream guard and build-tester gates
 remain required for the final delivery.
 
+The candidate and accepted uploads include hidden files in the prepared `dist`
+directory. Its checksums cover the example `.gitattributes` as well as ordinary
+files; the upload action's default hidden-file exclusion would otherwise drop a
+checksummed file. Only the prepared delivery directory is uploaded.
+
 The small `runtime-composition-proof` artifact contains these metadata files
 and `SHA256SUMS`, without the browser archive. It lets reviewers identify the
 new archive and unchanged native core hashes without downloading the browser.
