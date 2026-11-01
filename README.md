@@ -133,7 +133,7 @@ python3 -m camoufox_trace_mcp events capture.log --api WebGLRenderingContext.get
 - `source` 是 SpiderMonkey 的直接调用位置，列号 **从 1 开始**；没有脚本调用者的访问会被排除，调用者文件名仍可能为 null。没有 source map 还原。
 - 没有稳定 frame ID、Worker ID、request ID；`pid` 和 `realm_class` 不能代替这些 ID。构造器名称为 `Interface.constructor`，旧式工厂保留其 IDL 成员名。
 - 序号在入口分配、事件在退出写出，因此嵌套/并发调用可乱序。`mono_us` 是本机单调时钟微秒，不能当成网站时间线；`duration_us` 包含记录开销。
-- 字符串使用有界 UTF-8 摘要并标记截断；最多 4 个参数。对象只取原生类名，不执行属性读取、代理、序列化或用户转换。Promise 结果、ImageData 像素、Float32Array 内容和 `copyFromChannel` 的输出缓冲区未采集；相同摘要不能证明内容相同。
+- 字符串使用有界 UTF-8 摘要并标记截断；最多 4 个参数。JSON 会将 U+2028/U+2029 转义为 `\u2028`/`\u2029`，避免 Playwright 的 Node 行读取器将一个事件拆成多行；解析后字符串值不变，转义后的 6 字节计入摘要上限。对象只取原生类名，不执行属性读取、代理、序列化或用户转换。Promise 结果、ImageData 像素、Float32Array 内容和 `copyFromChannel` 的输出缓冲区未采集；相同摘要不能证明内容相同。
 - 栈最多 12 层和 512 个编码字节；`stack_status` 区分 disabled/captured/unavailable。每条记录最多 4096 字节，经 stderr 写出；管道被关闭或跨进程传输破损仍可能丢失日志。
 - 这是生成的 WebIDL 绑定入口覆盖。JIT 优化、常量/缓存、DOM proxy 的命名/索引特殊路径、非 WebIDL 的 SpiderMonkey 原生函数、纯 JavaScript 运算和其他进程路径可能绕过入口；未关闭 JIT，也未验证各优化层的覆盖率。它不等同于 VisibleV8 的 V8 引擎插桩。
 - 通用包装器在进入专用绑定前拒绝的非法接收者调用不会记录；仅查询属性描述符或取得方法引用而不执行绑定，也不产生对应的 getter/方法事件。
@@ -141,7 +141,7 @@ python3 -m camoufox_trace_mcp events capture.log --api WebGLRenderingContext.get
 
 ## 开发检查
 
-Python 3.11+、Git、支持 C++17 与 UBSan 的 `g++`。从固定上游下载 3 个文件即可做这些检查，不会得到完整 Firefox 源码：
+Python 3.11+、Git、支持 C++20 与 UBSan 的 `g++`，以及 Node.js（`node`，可用 `NODE` 指定可执行文件）。Node 测试通过 Playwright 使用的 `readline` 路径核对序列化后的完整记录；可将 `NODE` 指向 Python Playwright 包的 `driver/node`。从固定上游下载测试所需文件即可做这些检查，不会得到完整 Firefox 源码：
 
 ```bash
 python3 tools/fetch_test_source.py .test-source
@@ -149,6 +149,6 @@ python3 tools/generate_patch.py --source .test-source --check
 FIREFOX_SOURCE=.test-source python3 -m unittest discover -s tests -v
 ```
 
-缺少源码或编译器会失败。修改生成规则时，编辑 `tools/generate_patch.py` 并从固定源文件重新生成 diff，更新 `baseline.json` 中对应的输出哈希；不要手改 `.patch`。修改覆盖文件也必须更新其 SHA-256。
+缺少源码、编译器或 Node 会失败。修改生成规则时，编辑 `tools/generate_patch.py` 并从固定源文件重新生成 diff，更新 `baseline.json` 中对应的输出哈希；不要手改 `.patch`。修改覆盖文件也必须更新其 SHA-256。
 
 原生文件与对 Mozilla 文件的修改遵循 MPL-2.0，见 [LICENSE](LICENSE)。

@@ -84,6 +84,16 @@ class JsonBuffer final {
         if (valid) {
           consumed = length;
           piece = {text.data() + offset, length};
+          // Node readline treats these JSON-valid characters as line endings.
+          if (length == 3 && first == 0xE2 &&
+              static_cast<unsigned char>(text[offset + 1]) == 0x80 &&
+              (static_cast<unsigned char>(text[offset + 2]) == 0xA8 ||
+               static_cast<unsigned char>(text[offset + 2]) == 0xA9)) {
+            escaped[0] = '\\'; escaped[1] = 'u';
+            escaped[2] = '2'; escaped[3] = '0'; escaped[4] = '2';
+            escaped[5] = text[offset + 2] == static_cast<char>(0xA8) ? '8' : '9';
+            piece = {escaped, 6};
+          }
         } else {
           piece = "\\ufffd";
           changed = true;
