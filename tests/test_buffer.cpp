@@ -51,6 +51,22 @@ int main() {
   empty.String("");
   assert(empty.View() == "\"\"");
 
+  JsonBuffer<128> separators;
+  separators.String("before\xe2\x80\xa8middle\xe2\x80\xa9" "after\xc2\x85", 128);
+  assert(!separators.Truncated());
+  assert(!separators.Failed());
+  assert(separators.View() == "\"before\\u2028middle\\u2029after\xc2\x85\"");
+  std::cout << separators.View() << '\n';
+
+  JsonBuffer<64> separatorLimit;
+  separatorLimit.String("\xe2\x80\xa8rest", 5);
+  assert(separatorLimit.Truncated());
+  assert(separatorLimit.View() == "\"\"");
+  JsonBuffer<64> separatorExact;
+  separatorExact.String("\xe2\x80\xa9rest", 6);
+  assert(separatorExact.Truncated());
+  assert(separatorExact.View() == "\"\\u2029\"");
+
   JsonBuffer<128> format;
   format.String("%o %O %j %% %s");
   std::cout << format.View() << '\n';

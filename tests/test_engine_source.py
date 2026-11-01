@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
   js::ScriptSource parentSource(10, u"ancestor source");
   js::ScriptSourceObject parentObject(&parentSource);
   JSScript parent{&parentObject, &runtime};
-  if (scenario == "missing" || scenario == "missing-repeated" || scenario == "long-missing") source.loaded = false;
+  if (scenario == "missing" || scenario == "missing-repeated" || scenario == "long-missing" || scenario == "checkpoint-missing") source.loaded = false;
   if (scenario == "empty-source") source.text.clear();
   if (scenario == "preexisting-exception") { source.loaded = false; cx.exception = true; }
   if (scenario == "no-script") cx.frame = nullptr;
@@ -323,6 +323,15 @@ int main(int argc, char** argv) {
       context->exception = true; context->oom = context->hookOOM; return false;
     });
   }
+  if (scenario.starts_with("checkpoint")) {
+    gContextCallback.store(+[](JSContext* context, JS::MutableHandle<JSString*> href,
+                               JS::MutableHandle<JSString*> token) {
+      href.set(String(context, u"https://example.test/current"));
+      token.set(String(context, u"https://example.test"));
+      return true;
+    });
+  }
+  if (scenario == "checkpoint-cap") config.maximum = 130;
   JS::Value receiver{nullptr, "{19,Navigator}"}, key{nullptr, "\"webdriver\""};
   js::CamoufoxMonitorProperty(&cx, 0, receiver, key, {});
   if (scenario == "retry") {
@@ -333,6 +342,11 @@ int main(int argc, char** argv) {
   if (scenario == "missing-repeated") {
     js::CamoufoxMonitorProperty(&cx, 0, receiver, key, {});
     js::CamoufoxMonitorProperty(&cx, 0, receiver, key, {});
+  }
+  if (scenario.starts_with("checkpoint")) {
+    for (unsigned i = 1; i < 400; ++i) {
+      js::CamoufoxMonitorProperty(&cx, 0, receiver, key, {});
+    }
   }
   std::cout << "hook_reads=" << sourceHookReads << ";pending=" << cx.exception << ";oom=" << cx.oom << '\n';
 }
@@ -385,6 +399,47 @@ class EngineSourceTests(unittest.TestCase):
         notices = [item for item in controls if item["event"] == "source_unavailable"]
         limits = [item for item in controls if item["event"] == "limit"]
         return raw, notices, limits, result.stdout.strip()
+
+    def test_context_checkpoint_bounds_unknown_context_after_a_lost_record(self):
+        raw, notices, limits, _ = self.capture("checkpoint")
+        self.assertEqual((notices, limits), ([], []))
+        self.assertEqual(sum(item.startswith("g2:") for item in raw), 400)
+        self.assertEqual(sum(item.startswith("$11:") for item in raw), 1)
+        checkpoints = [index for index, item in enumerate(raw) if item.startswith("~")]
+        self.assertGreater(len(checkpoints), 1)
+        self.assertTrue(all(right - left <= 129
+                            for left, right in zip(checkpoints, checkpoints[1:])))
+        for index in checkpoints[1:]:
+            self.assertEqual(raw[index + 1:index + 3],
+                             ['@"https\\://example.test/current":"https\\://example.test"', "!11"])
+        # Emulate a consumer losing one ordinary API record: it must stay
+        # unknown until the next explicit isolate/origin/script checkpoint.
+        lost = next(index for index in range(10, len(raw)) if raw[index].startswith("g"))
+        recovery = next(index for index in checkpoints if index > lost)
+        self.assertLessEqual(recovery - lost, 129)
+        self.assertTrue(any(item.startswith("g2:") for item in raw[recovery + 3:]))
+
+    def test_checkpoint_does_not_invent_an_unavailable_script(self):
+        raw, notices, limits, _ = self.capture("checkpoint-missing")
+        self.assertEqual(limits, [])
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(sum(item.startswith("g-1:") for item in raw), 400)
+        self.assertFalse(any(item.startswith("$") for item in raw))
+        checkpoints = [index for index, item in enumerate(raw) if item.startswith("~")]
+        self.assertGreater(len(checkpoints), 1)
+        for index in checkpoints[1:]:
+            self.assertTrue(raw[index + 1].startswith("@"))
+            self.assertEqual(raw[index + 2], "!?")
+
+    def test_checkpoint_records_obey_the_existing_process_budget(self):
+        raw, notices, limits, _ = self.capture("checkpoint-cap")
+        self.assertEqual(notices, [])
+        self.assertEqual(len(raw), 130)
+        self.assertEqual(len(limits), 1)
+        self.assertEqual((limits[0]["reason"], limits[0]["emitted"]),
+                         ("engine_record_cap", 130))
+        self.assertEqual(raw[-1][0], "~")
+        self.assertLess(sum(item.startswith("g2:") for item in raw), 130)
 
     def test_missing_source_preserves_api_with_unknown_script_and_explicit_provenance(self):
         raw, notices, limits, state = self.capture("missing")

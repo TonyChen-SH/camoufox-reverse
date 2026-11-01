@@ -27,13 +27,22 @@ class BufferTests(unittest.TestCase):
                 str(ROOT / "tests/test_buffer.cpp"), "-o", str(binary),
             ], check=True)
             result = subprocess.run([str(binary)], capture_output=True, text=True, check=True)
-            records = [json.loads(line) for line in result.stdout.splitlines()]
+            records = [json.loads(line) for line in result.stdout.split("\n") if line]
             self.assertIn("\0", records[0])
             self.assertIn("\n", records[0])
             self.assertEqual(records[1], "中")
             self.assertEqual(records[2], "\ufffd" * 5)
             self.assertEqual(records[3], [2**64 - 1, 0.125, "Infinity", "-Infinity", "NaN"])
-            self.assertEqual(records[4], "%o %O %j %% %s")
+            self.assertEqual(records[4], "before\u2028middle\u2029after\u0085")
+            self.assertEqual(records[5], "%o %O %j %% %s")
+            # Playwright forwards browser stderr through Node's readline;
+            # its Unicode line terminators must never split a JSON record.
+            forwarded = subprocess.run([
+                os.environ.get("NODE", "node"), "-e",
+                "const rl = require('readline').createInterface({input: process.stdin});"
+                "rl.on('line', line => { JSON.parse(line); console.log(line); });",
+            ], input=result.stdout, capture_output=True, text=True, check=True)
+            self.assertEqual([json.loads(line) for line in forwarded.stdout.split("\n") if line], records)
             # Browser-driver log sinks can interpret printf-style formatting.
             self.assertNotIn("%", result.stdout)
 
