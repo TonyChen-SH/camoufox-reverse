@@ -23,6 +23,54 @@ SCRIPT_SHA = hashlib.sha256(SCRIPT).hexdigest()
 ENCODINGS = ("identity", "gzip", "stacked")
 CACHES = ("no-store", "public, max-age=3600")
 HEADER_NAMES = ("content-encoding", "content-length", "cache-control", "vary")
+PHASES = ("cold-main",) + tuple(f"iframe-{index}" for index in range(1, 6))
+LOG_MESSAGES = {
+    "fetch_count_below_threshold": b"Bytecode-cache: Skip disk: fetchCount",
+    "scheduled_disk_encoding": b"Schedule the disk cache encoding.",
+    "started_disk_encoding": b"Start the disk cache encoding.",
+    "disk_write_success": b"Write the disk cache (rv = 0,",
+    "serialized_stencil_chunks": b"SRIAndSerializedStencil length =",
+}
+
+
+def logging_environment(output, private, recipient):
+    if bool(private) != bool(recipient):
+        raise ValueError("Private output and recipient must be provided together")
+    environment = dict(os.environ)
+    if environment.get("MOZ_DISABLE_CONTENT_SANDBOX"):
+        raise RuntimeError("Content sandbox must remain enabled")
+    environment.update(CAMOUFOX_TRACE="0", CAMOUFOX_ENGINE_TRACE="0")
+    for key in ("MOZ_LOG", "MOZ_LOG_FILE", "NSPR_LOG_MODULES", "NSPR_LOG_FILE"):
+        environment.pop(key, None)
+    if private:
+        public_path, private_path = output.resolve(), private.resolve()
+        if private_path.is_relative_to(public_path) or public_path.is_relative_to(private_path):
+            raise ValueError("Private output must be disjoint from public output")
+        if not recipient.is_file():
+            raise FileNotFoundError("Evidence recipient is required")
+        environment.update(MOZ_LOG="timestamp,ScriptLoader:5",
+                           MOZ_LOG_FILE=str(private_path / "scriptloader.log"))
+    return environment
+
+
+def summarize_logs(private):
+    summary = {"files": [], "message_counts": {name: 0 for name in LOG_MESSAGES},
+               "count_unit": "log-message occurrences, not unique scripts or requests",
+               "scope": "All browser ScriptLoader messages; fixture attribution requires the encrypted logs"}
+    for path in sorted(private.glob("scriptloader.log*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        hasher = hashlib.sha256()
+        size = 0
+        with path.open("rb") as stream:
+            for line in stream:
+                hasher.update(line)
+                size += len(line)
+                for name, message in LOG_MESSAGES.items():
+                    summary["message_counts"][name] += line.count(message)
+        summary["files"].append({"bytes": size, "sha256": hasher.hexdigest()})
+    summary["serialized_stencil_observed"] = summary["message_counts"]["serialized_stencil_chunks"] > 0
+    return summary
 
 
 def script_response(encoding, cache):
@@ -110,9 +158,10 @@ async def probe_case(browser, server, case, settle_ms):
     phase = "cold-main"
 
     async def capture(request, observed_phase):
-        row = {"phase": observed_phase, "frame": "main" if request.frame == page.main_frame else "iframe"}
+        row = {"phase": observed_phase}
         result["scripts"].append(row)
         try:
+            row["frame"] = "main" if request.frame == page.main_frame else "iframe"
             response = await request.response()
             row["status"] = response.status
             headers = await response.all_headers()
@@ -139,7 +188,7 @@ async def probe_case(browser, server, case, settle_ms):
         {"phase": phase, "resource_type": request.resource_type,
          "failure_codes": re.findall(r"\bNS_ERROR_[A-Z0-9_]+\b", request.failure or "")}))
     try:
-        for phase in ("cold-main", "warm-iframe", "reset-iframe"):
+        for phase in PHASES:
             before = len(result["scripts"])
             try:
                 if phase == "cold-main":
@@ -150,6 +199,10 @@ async def probe_case(browser, server, case, settle_ms):
                     state = page.frame_locator("iframe").locator("#script-state")
                 from playwright.async_api import expect
                 await expect(state).to_have_text("ready", timeout=15000)
+                handle = await state.element_handle()
+                frame = await handle.owner_frame()
+                await frame.wait_for_load_state("load", timeout=15000)
+                await handle.dispose()
                 # Allow background bytecode-cache work to run before the next load.
                 # This fixed observation window is not a retry or success fallback.
                 await page.wait_for_timeout(settle_ms)
@@ -160,7 +213,6 @@ async def probe_case(browser, server, case, settle_ms):
             except Exception as error:
                 result["phases"].append({"phase": phase, "executed": False,
                                          **error_summary(error)})
-                break
     finally:
         if pending:
             try:
@@ -170,7 +222,7 @@ async def probe_case(browser, server, case, settle_ms):
         await context.close()
     with server.lock:
         result["server_fetches"] = [row for row in server.fetches if row["case"] == case]
-    result["passed"] = (len(result["phases"]) == 3
+    result["passed"] = (len(result["phases"]) == len(PHASES)
         and all(row["executed"] and row.get("body_events", 0) > 0 for row in result["phases"])
         and bool(result["scripts"]) and all(row.get("matches_source") for row in result["scripts"])
         and not result["request_failures"] and "drain_error" not in result)
@@ -180,10 +232,19 @@ async def probe_case(browser, server, case, settle_ms):
 async def run(args):
     args.output.mkdir(parents=True, exist_ok=False)
     report = {"source_bytes": len(SCRIPT), "source_sha256": SCRIPT_SHA,
-              "settle_ms": args.settle_ms, "cases": []}
+              "settle_ms": args.settle_ms, "phases": PHASES,
+              "cache_coverage_basis": "Serialized-stencil log evidence only; elapsed time does not prove cache coverage",
+              "cases": []}
     server = None
     thread = None
+    private = getattr(args, "private_output", None)
+    recipient = getattr(args, "recipient", None)
+    private_created = False
     try:
+        environment = logging_environment(args.output, private, recipient)
+        if private:
+            private.mkdir(parents=True, exist_ok=False, mode=0o700)
+            private_created = True
         from playwright.async_api import async_playwright
         binary = args.binary.resolve(strict=True)
         for name, path in (("binary", binary), ("libxul", binary.parent / "libxul.so")):
@@ -195,10 +256,6 @@ async def run(args):
         server = Fixture()
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        environment = dict(os.environ)
-        if environment.get('MOZ_DISABLE_CONTENT_SANDBOX'):
-            raise RuntimeError('Content sandbox must remain enabled')
-        environment.update(CAMOUFOX_TRACE='0', CAMOUFOX_ENGINE_TRACE='0')
         async with async_playwright() as playwright:
             browser = await playwright.firefox.launch(executable_path=str(binary), headless=False,
                                                        env=environment, timeout=60000)
@@ -224,16 +281,33 @@ async def run(args):
                 server.shutdown()
                 thread.join()
             server.server_close()
+        if private_created:
+            try:
+                report["cache_log"] = summarize_logs(private)
+                if not report["cache_log"]["files"]:
+                    raise RuntimeError("Requested ScriptLoader logs were not produced")
+            except Exception as error:
+                report["evidence_error"] = error_summary(error)
+            try:
+                from run import encrypt_private
+                report["private_evidence"] = encrypt_private(private, recipient, args.output / "private-evidence.cms")
+            except Exception as error:
+                report["evidence_error"] = error_summary(error)
         (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    return 0 if len(report["cases"]) == 12 and all(row["passed"] for row in report["cases"]) and "run_error" not in report else 1
+    return 0 if (len(report["cases"]) == 12 and all(row["passed"] for row in report["cases"])
+                 and "run_error" not in report and "evidence_error" not in report) else 1
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--private-output", type=Path)
+    parser.add_argument("--recipient", type=Path)
     parser.add_argument("--settle-ms", type=int, default=1000)
     args = parser.parse_args()
     if not 0 <= args.settle_ms <= 10000:
         parser.error("--settle-ms must be between 0 and 10000")
+    if bool(args.private_output) != bool(args.recipient):
+        parser.error("--private-output and --recipient must be provided together")
     raise SystemExit(asyncio.run(run(args)))

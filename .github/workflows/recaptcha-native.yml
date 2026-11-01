@@ -107,6 +107,8 @@ jobs:
       - name: Verify the scenario and evidence contracts
         run: python -m unittest discover -s web-tests -p 'test_*.py' -v
       - name: Capture script body metadata with native Camoufox
+        env:
+          MOZ_LOG: timestamp,ScriptLoader:5
         run: |
           xvfb-run -a python web-tests/run.py \
             --binary .browser/bin/camoufox-bin \
@@ -120,7 +122,9 @@ jobs:
         run: |
           xvfb-run -a python web-tests/response_body_probe.py \
             --binary .browser/bin/camoufox-bin \
-            --output evidence/response-body
+            --output evidence/response-body \
+            --private-output "$RUNNER_TEMP/body-probe-private" \
+            --recipient web-tests/evidence-recipient.pem
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -130,4 +134,4 @@ jobs:
           retention-days: 7
       - name: Remove private session captures
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/recaptcha-private" "$RUNNER_TEMP/recaptcha-private.tar.gz"
+        run: rm -rf -- "$RUNNER_TEMP/recaptcha-private" "$RUNNER_TEMP/recaptcha-private.tar.gz" "$RUNNER_TEMP/body-probe-private" "$RUNNER_TEMP/body-probe-private.tar.gz"

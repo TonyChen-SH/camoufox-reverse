@@ -168,3 +168,11 @@ observation windows permit background cache work; failures are never retried.
 The report contains only controlled fixture hashes, sizes, header metadata and
 error codes. Tracing stays off and the browser content sandbox remains enabled.
 The HTTP fixture unit test requires loopback socket permission.
+
+The cache follow-up uses six fixed document loads (one main document and five
+frames), matching the pinned Firefox default threshold of four same-cache-entry
+fetches before bytecode encoding. Optional paired `--private-output` and
+`--recipient` flags retain encrypted ScriptLoader logs. Public summaries expose
+only hashes, sizes and fixed-message counts. A wait duration or HTTP cache hit
+alone does not establish that serialized-stencil delivery occurred; encrypted
+logs retain the evidence needed for per-fixture attribution.
