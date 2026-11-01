@@ -1,0 +1,137 @@
+name: Native reCAPTCHA integration and monitoring
+
+on:
+  pull_request:
+    paths:
+      - 'web-tests/**'
+      - '.github/workflows/recaptcha-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recaptcha-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Initialize public evidence directory
+        run: mkdir -p evidence
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/checkout@v4
+        with:
+          ref: dee8bb66c386e76cfe771c60e80c407d4827ed62
+          path: native-source
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: TonyChen-SH/camoufox-reverse-mcp
+          ref: fabddde3cab06580f308ab9d4ba80a5b47a2895c
+          path: analysis
+          persist-credentials: false
+      - name: Verify the accepted artifact identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import urllib.request
+
+          endpoint = 'https://api.github.com/repos/TonyChen-SH/camoufox-reverse/actions/artifacts/12984328007'
+          request = urllib.request.Request(endpoint, headers={
+              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+          })
+          with urllib.request.urlopen(request, timeout=30) as response:
+              artifact = json.load(response)
+          expected = {
+              'id': 12984328007,
+              'name': 'camoufox-engine-trace-linux-x86_64',
+              'digest': 'sha256:beeeaccb365a74a0c06e59dfc9c8e6e683047e6425bba99937a816f550b8d52b',
+              'expired': False,
+          }
+          for key, value in expected.items():
+              if artifact.get(key) != value:
+                  raise ValueError('Native artifact identity mismatch: ' + key)
+          run = artifact.get('workflow_run', {})
+          if run.get('id') != 41064733272 or run.get('head_sha') != 'dee8bb66c386e76cfe771c60e80c407d4827ed62':
+              raise ValueError('Native artifact build provenance mismatch')
+          expected['workflow_run'] = {key: run[key] for key in ('id', 'head_sha')}
+          Path('evidence/artifact-identity.json').write_text(json.dumps(expected, indent=2) + '\n')
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '12984328007'
+          repository: TonyChen-SH/camoufox-reverse
+          run-id: '41064733272'
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: dist
+      - name: Install the accepted build's runtime prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth libgtk-3-0 libasound2t64 libdbus-glib-1-2 \
+            libx11-xcb1 libxcb-shm0 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 \
+            libxi6 libxrandr2 libxtst6 libpci3 libegl1 libgl1-mesa-dri zstd openssl
+          python -m pip install --no-deps -e analysis
+          python -m pip install -r analysis/requirements-mcp.lock
+          python -m pip install 'playwright==1.62.0'
+      - name: Verify and unpack the compiled native browser
+        run: |
+          cd dist
+          sha256sum --check SHA256SUMS
+          printf '%s\n' 'ec424c65a9d0ecec0343c9df857ed36d97b4ae81a1bce70bc88ea2e87d3746c1  camoufox-trace-linux-x86_64.tar.zst' | sha256sum --check -
+          cmp baseline.json ../native-source/baseline.json
+          mkdir -p ../.browser
+          zstd -d -c camoufox-trace-linux-x86_64.tar.zst | tar -C ../.browser -xf -
+          test -x ../.browser/bin/camoufox-bin
+          test -f ../.browser/bin/libxul.so
+          cp SHA256SUMS ../evidence/browser-package-SHA256SUMS
+          cp baseline.json ../evidence/browser-baseline.json
+      - name: Verify the scenario and evidence contracts
+        run: python -m unittest discover -s web-tests -p 'test_*.py' -v
+      - name: Capture script body metadata with native Camoufox
+        env:
+          MOZ_LOG: timestamp,ScriptLoader:5
+        run: |
+          xvfb-run -a python web-tests/run.py \
+            --binary .browser/bin/camoufox-bin \
+            --output evidence/run \
+            --private-output "$RUNNER_TEMP/recaptcha-private" \
+            --recipient web-tests/evidence-recipient.pem \
+            --source-baseline dist/baseline.json \
+            --scenarios test-key --modes off --capture-profile baseline
+      - name: Check script body decoding across compression and cache reuse
+        if: always()
+        run: |
+          xvfb-run -a python web-tests/response_body_probe.py \
+            --binary .browser/bin/camoufox-bin \
+            --output evidence/response-body \
+            --private-output "$RUNNER_TEMP/body-probe-private" \
+            --recipient web-tests/evidence-recipient.pem
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recaptcha-native-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove private session captures
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/recaptcha-private" "$RUNNER_TEMP/recaptcha-private.tar.gz" "$RUNNER_TEMP/body-probe-private" "$RUNNER_TEMP/body-probe-private.tar.gz"
