@@ -105,14 +105,15 @@ jobs:
           cp baseline.json ../evidence/browser-baseline.json
       - name: Verify the scenario and evidence contracts
         run: python -m unittest discover -s web-tests -p 'test_*.py' -v
-      - name: Run OFF, WebIDL and engine against the official integration
+      - name: Observe a single official checkbox activation in all three modes
         run: |
           xvfb-run -a python web-tests/run.py \
             --binary .browser/bin/camoufox-bin \
             --output evidence/run \
             --private-output "$RUNNER_TEMP/recaptcha-private" \
             --recipient web-tests/evidence-recipient.pem \
-            --source-baseline dist/baseline.json
+            --source-baseline dist/baseline.json \
+            --scenarios demo-activation
       - uses: actions/upload-artifact@v4
         if: always()
         with:

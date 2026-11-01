@@ -23,10 +23,12 @@ class Contracts(unittest.TestCase):
         self.assertTrue(web.google_source('https://www.gstatic.com/recaptcha/releases/version/recaptcha__en.js'))
 
     def test_public_error_messages_are_not_exported(self):
-        page = {'checks': {'ok': True}, 'errors': [{'type': 'Error', 'message': 'TOKEN'}], 'page_errors': ['SECRET']}
+        page = {'checks': {'ok': True}, 'errors': [{'type': 'Error', 'message': 'TOKEN'}],
+                'page_errors': ['SECRET'], 'activation_frame_text': 'PRIVATE CHALLENGE TEXT'}
         result = web.safe_page(page)
         self.assertNotIn('TOKEN', json.dumps(result))
         self.assertNotIn('SECRET', json.dumps(result))
+        self.assertNotIn('PRIVATE CHALLENGE TEXT', json.dumps(result))
         self.assertEqual(result['checks'], page['checks'])
 
     def test_current_reader_and_mode_contracts(self):

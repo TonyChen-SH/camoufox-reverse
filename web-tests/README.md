@@ -35,6 +35,21 @@ Each scenario runs with tracing OFF, WebIDL binding tracing, and engine tracing:
 3. Interrupt `api.js` on the local integration page to verify that a network
    failure remains visible and does not report the widget as ready.
 
+The default local matrix runs these nine cases. The current workflow uses
+`--scenarios demo-activation` for three additional cases: click the official
+demo checkbox once, then observe the checkbox and visible challenge-frame state
+for up to 20 seconds. It does not select challenge images, switch or solve audio,
+or submit the form. `checkbox_checked` describes client UI only;
+`bframe_visible_unclassified` does not assert that a challenge was solved or
+that a visible frame contains a specific challenge type. A completed observation
+is separate from the UI outcome and from server-side acceptance.
+
+The original nine-case evidence is retained in
+[run 41279483288](https://github.com/TonyChen-SH/camoufox-reverse/actions/runs/41279483288).
+All nine functional page checks passed; the binding test-key capture and engine
+script-failure capture reported incomplete evidence, so that run failed its
+monitoring gate. The activation follow-up does not replace or relabel that run.
+
 The same compiled browser and launch configuration are used across modes. CI
 uses Xvfb on Linux and keeps the browser content sandbox enabled. The suite does
 not solve production image/audio challenges. It does not rotate identities,

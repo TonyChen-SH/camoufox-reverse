@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 MODES = ('off', 'binding', 'engine')
 SCENARIOS = ('demo', 'test-key', 'script-failure')
+ALL_SCENARIOS = SCENARIOS + ('demo-activation',)
 SOURCE_COMMIT = 'dee8bb66c386e76cfe771c60e80c407d4827ed62'
 HTML = b'''<!doctype html><meta charset="utf-8"><title>reCAPTCHA test-key integration</title>
 <h1>Official reCAPTCHA test-key integration</h1><div id="widget"></div>
@@ -173,7 +174,7 @@ def browser_case(binary, mode, scenario, private, public):
             if scenario == 'script-failure':
                 context.route('https://www.google.com/recaptcha/api.js*',
                               lambda route: route.abort('internetdisconnected'))
-            url = ('https://www.google.com/recaptcha/api2/demo' if scenario == 'demo'
+            url = ('https://www.google.com/recaptcha/api2/demo' if scenario in ('demo', 'demo-activation')
                    else f'http://127.0.0.1:{server.server_port}/')
             try:
                 response = page.goto(url, wait_until='domcontentloaded', timeout=30000)
@@ -191,7 +192,28 @@ def browser_case(binary, mode, scenario, private, public):
                     result['checks']['checkbox_visible'] = True
                     result['widget_ready_ms'] = stamp()
                     checkpoint()
-                    if scenario == 'test-key':
+                    if scenario == 'demo-activation':
+                        result['actions'].append({'event': 'official_checkbox_click_attempt', 't_ms': stamp()})
+                        checkpoint()
+                        anchor.click(timeout=10000)
+                        result['activation_observations'] = []
+                        deadline = time.monotonic() + 20
+                        while True:
+                            checked = anchor.get_attribute('aria-checked', timeout=2000) == 'true'
+                            frames_visible = page.locator('iframe[src*="/recaptcha/api2/bframe"]').first.is_visible()
+                            result['activation_observations'].append({'t_ms': stamp(),
+                                'checkbox_checked': checked, 'bframe_visible': frames_visible})
+                            if checked or frames_visible or time.monotonic() >= deadline:
+                                result['ui_outcome'] = ('checkbox_checked' if checked else
+                                    'bframe_visible_unclassified' if frames_visible else 'no_terminal_ui_before_deadline')
+                                break
+                            page.wait_for_timeout(200)
+                        if frames_visible:
+                            result['activation_frame_text'] = page.frame_locator(
+                                'iframe[src*="/recaptcha/api2/bframe"]').locator('body').inner_text(timeout=5000)
+                        result['checks']['single_click_observation_completed'] = True
+                        checkpoint()
+                    elif scenario == 'test-key':
                         page.locator('#state').filter(has_text='"ready":true').wait_for(timeout=10000)
                         before = json.loads(page.locator('#state').inner_text())
                         result['checks']['initial_response_empty'] = before['responseLength'] == 0
@@ -242,7 +264,9 @@ def browser_case(binary, mode, scenario, private, public):
 
 def safe_page(page):
     # Error text can contain signed URLs; publish only types and hashes.
-    result = {k: v for k, v in page.items() if k not in ('errors', 'page_errors')}
+    result = {k: v for k, v in page.items() if k not in ('errors', 'page_errors', 'activation_frame_text')}
+    if 'activation_frame_text' in page:
+        result['activation_frame_text_sha256'] = hashlib.sha256(page['activation_frame_text'].encode()).hexdigest()
     result['errors'] = [{'type': e['type'], 'message_sha256': hashlib.sha256(e['message'].encode()).hexdigest()}
                         for e in page.get('errors', [])]
     result['page_errors'] = [hashlib.sha256(e.encode()).hexdigest() for e in page.get('page_errors', [])]
@@ -318,7 +342,7 @@ def matrix(args):
               'cases': []}
     write_json(args.output / 'report.json', report)
     try:
-        for scenario in SCENARIOS:
+        for scenario in args.scenarios:
             for mode in MODES:
                 private = args.private_output / scenario / mode
                 public = args.output / scenario / mode
@@ -350,7 +374,7 @@ def matrix(args):
                 print(json.dumps({'scenario': scenario, 'mode': mode, 'passed': result['passed'],
                       'page_passed': result['page'].get('page_checks_passed', False),
                       'events': result['capture']['event_count'], 'integrity': result['capture']['integrity']}), flush=True)
-        report['passed'] = len(report['cases']) == 9 and all(c['passed'] for c in report['cases'])
+        report['passed'] = len(report['cases']) == len(args.scenarios) * len(MODES) and all(c['passed'] for c in report['cases'])
     finally:
         report['private_evidence'] = encrypt_private(args.private_output, args.recipient, args.output / 'private-evidence.cms')
         report['finished_at'] = datetime.now(timezone.utc).isoformat()
@@ -367,7 +391,8 @@ def main():
     parser.add_argument('--recipient', type=Path)
     parser.add_argument('--child', action='store_true')
     parser.add_argument('--mode', choices=MODES)
-    parser.add_argument('--scenario', choices=SCENARIOS)
+    parser.add_argument('--scenario', choices=ALL_SCENARIOS)
+    parser.add_argument('--scenarios', nargs='+', choices=ALL_SCENARIOS, default=SCENARIOS)
     args = parser.parse_args()
     if args.child:
         if args.mode is None or args.scenario is None:
