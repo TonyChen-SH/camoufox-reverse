@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "kind": "verbatim ancestor projection of actual configured Firefox Linux IDL",
+  "source_pull_request": "https://github.com/TonyChen-SH/camoufox-reverse/pull/11",
+  "firefox_commit": "9378fbc58660847fbc02c3486a0ecd6049978e25",
+  "camoufox_commit": "b6205b0ee1e4c2e8e4bb9eb0e084472028a9c6a3",
+  "source_full_idldata_sha256": "a879bbd7f685a3a480f0da7cb183e3061cd81830c84327b808a9e623e24cc7df",
+  "source_manifest_sha256": "071bba62ec8701cc1afcb90a51a8420f8597a6b3507644688ad664be3a898480",
+  "projection_file": "firefox158-document-idl.json",
+  "projection_sha256": "628128dc040413d7500003acf3984d0d84ede48aeee6b0e7b314d417e72e6cd5",
+  "interfaces": [
+    "HTMLDocument",
+    "Document",
+    "Node",
+    "EventTarget"
+  ],
+  "wire_fixture_kind": "synthetic records; no browser capture claim"
+}
